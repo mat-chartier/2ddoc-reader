@@ -187,7 +187,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.7</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.8</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -722,6 +722,7 @@ document.getElementById('btnManual').addEventListener('click', function() {
   var videoTrack = null;
   var imageCapture = null;
 
+
   function startCamera() {
     if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
 
@@ -729,13 +730,19 @@ document.getElementById('btnManual').addEventListener('click', function() {
       try { barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] }); } catch(e) {}
     }
 
-    navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width:  { ideal: 1920 },
-          height: { ideal: 1080 }
-        }
-      })
+    // Contraintes directement dans getUserMedia — plus fiable que applyConstraints après coup
+    var constraints = {
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1280 },
+        height: { ideal: 720 },
+        focusMode: 'continuous',          // demandé dès l'ouverture
+        exposureMode: 'continuous',
+        whiteBalanceMode: 'continuous'
+      }
+    };
+
+    navigator.mediaDevices.getUserMedia(constraints)
       .then(function(s) {
         stream = s; video.srcObject = s; video.play();
         scanning = true;
@@ -743,28 +750,27 @@ document.getElementById('btnManual').addEventListener('click', function() {
 
         videoTrack = s.getVideoTracks()[0];
 
-        // ── ImageCapture : grabFrame() force l'autofocus natif ──────
+        // ImageCapture pour grabFrame
         if (videoTrack && ('ImageCapture' in window)) {
           try { imageCapture = new ImageCapture(videoTrack); } catch(e) { imageCapture = null; }
         }
 
-        // AF continu comme base (le système gère entre les grabFrame)
+        // Afficher les capabilities réelles pour diagnostic
         if (videoTrack && videoTrack.getCapabilities) {
           var caps = videoTrack.getCapabilities();
-          var cAF = {};
-          if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0)
-            cAF.focusMode = 'continuous';
-          if (caps.exposureMode && caps.exposureMode.indexOf('continuous') >= 0)
-            cAF.exposureMode = 'continuous';
-          if (Object.keys(cAF).length)
-            videoTrack.applyConstraints({ advanced: [cAF] }).catch(function(){});
+          var settings = videoTrack.getSettings ? videoTrack.getSettings() : {};
+          var info = [];
+          if (settings.focusMode)  info.push('focus:' + settings.focusMode);
+          if (settings.width)      info.push(settings.width + 'x' + settings.height);
+          if (caps.focusMode)      info.push('modes:[' + caps.focusMode.join(',') + ']');
+          scanStatus.textContent = '⚙ ' + info.join(' · ');
         }
 
         video.addEventListener('loadedmetadata', function onMeta() {
           video.removeEventListener('loadedmetadata', onMeta);
           var engine = barcodeDetector ? 'BarcodeDetector' : 'ZXing';
           var capture = imageCapture ? '+grabFrame' : '';
-          scanStatus.textContent = engine + capture + ' · ' + video.videoWidth + 'x' + video.videoHeight + ' — Pointez vers un QR Code';
+          scanStatus.textContent = engine + capture + ' · ' + video.videoWidth + 'x' + video.videoHeight;
           scanTimer = setTimeout(scanTick, 1000);
         });
       })

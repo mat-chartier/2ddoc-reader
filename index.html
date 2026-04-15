@@ -3,180 +3,167 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Scanner QR Pro - A54 Optimization</title>
+    <title>Scanner Radical - Samsung A54 Fix</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
-        :root { --accent: #00ff00; }
-        body { font-family: sans-serif; margin: 0; background: #000; color: white; height: 100vh; overflow: hidden; }
+        body { margin: 0; background: #000; color: white; font-family: sans-serif; overflow: hidden; height: 100vh; }
+        #app { position: relative; width: 100%; height: 100%; }
+        video { position: absolute; width: 100%; height: 100%; object-fit: cover; opacity: 0.6; }
         
-        #app { position: relative; width: 100%; height: 100%; display: flex; justify-content: center; }
-        video { position: absolute; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
-
-        /* Overlay Interface */
-        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; 
-                   display: flex; flex-direction: column; align-items: center; justify-content: center;
-                   background: rgba(0,0,0,0.2); }
-
-        /* Zone de visée */
-        #scanner-box { width: 220px; height: 220px; border: 2px solid #fff; border-radius: 15px;
-                       box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5); position: relative; }
+        /* Overlay UI */
+        #overlay { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        #scanner-box { width: 250px; height: 250px; border: 3px solid #fff; border-radius: 20px; box-shadow: 0 0 0 100vmax rgba(0,0,0,0.7); position: relative; }
+        #scanner-box::after { content: "MISE AU POINT..."; position: absolute; top: -30px; width: 100%; text-align: center; color: #0f0; font-size: 12px; font-weight: bold; }
         
-        #scanner-box::after { content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 3px;
-                               background: var(--accent); box-shadow: 0 0 15px var(--accent);
-                               animation: scan 2.5s ease-in-out infinite; }
-        @keyframes scan { 0%, 100% { top: 5%; } 50% { top: 95%; } }
-
-        /* Contrôles de Zoom */
-        #controls { position: absolute; bottom: 120px; z-index: 5; width: 80%; max-width: 300px;
-                    background: rgba(0,0,0,0.7); padding: 15px; border-radius: 50px; 
-                    display: flex; align-items: center; gap: 10px; }
-        input[type=range] { flex: 1; accent-color: var(--accent); }
-
-        #info { position: absolute; top: 50px; background: rgba(0,0,0,0.7); padding: 8px 15px; 
-                border-radius: 20px; font-size: 0.9em; z-index: 5; }
-
-        /* Result Popup */
-        #result-popup { position: fixed; bottom: 40px; background: white; color: #000;
-                        padding: 20px; border-radius: 15px; width: 80%; display: none; z-index: 10;
-                        text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        #result-popup.show { display: block; animation: slideUp 0.3s ease-out; }
-        @keyframes slideUp { from { transform: translateY(100px); } to { transform: translateY(0); } }
-        button { background: #000; color: #fff; border: none; padding: 10px 20px; border-radius: 5px; margin-top: 10px; }
+        #status { position: absolute; top: 20px; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 20px; color: #0f0; font-size: 14px; }
+        
+        #result-popup { position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%); background: white; color: black; padding: 20px; border-radius: 15px; width: 80%; display: none; z-index: 100; text-align: center; }
+        button { background: #222; color: white; border: none; padding: 12px 25px; border-radius: 8px; margin-top: 15px; width: 100%; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div id="app">
-    <div id="info">Distance conseillée : 20-30 cm</div>
+    <div id="status">Recherche du flux optimal...</div>
     <video id="video" autoplay playsinline></video>
-    
     <div id="overlay">
         <div id="scanner-box"></div>
     </div>
-
-    <div id="controls">
-        <span>🔍</span>
-        <input type="range" id="zoom-range" min="1" max="1" step="0.1" value="1">
-        <span id="zoom-val">1x</span>
-    </div>
-
+    
     <div id="result-popup">
-        <div style="font-size: 0.8em; color: #666;">Contenu détecté :</div>
-        <div id="result-text" style="font-weight: bold; margin: 10px 0; word-break: break-all;"></div>
-        <button onclick="resetScan()">Scanner à nouveau</button>
+        <div id="result-text" style="word-break: break-all; margin-bottom: 10px;"></div>
+        <button onclick="restartScan()">RESCANNER</button>
     </div>
 </div>
 
-<canvas id="canvas" style="display:none;"></canvas>
+<canvas id="offscreenCanvas" style="display:none;"></canvas>
 
 <script>
     const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas').getContext('2d', { willReadFrequently: true });
-    const zoomRange = document.getElementById('zoom-range');
-    const zoomVal = document.getElementById('zoom-val');
+    const status = document.getElementById('status');
     const resultPopup = document.getElementById('result-popup');
     const resultText = document.getElementById('result-text');
+    const canvas = document.getElementById('offscreenCanvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-    let currentTrack = null;
+    let imageCapture = null;
+    let scanInterval = null;
     let isScanning = true;
 
-    async function initCamera() {
+    async function startRadicalScanner() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     facingMode: { exact: "environment" },
-                    width: { ideal: 1920 }, // Force le capteur principal haute résolution
+                    width: { ideal: 1920 },
                     height: { ideal: 1080 }
                 }
             });
-            
-            video.srcObject = stream;
-            currentTrack = stream.getVideoTracks()[0];
 
-            // Attendre que la caméra réponde pour configurer le hardware
-            video.onloadedmetadata = () => {
-                setTimeout(setupHardware, 1000);
-                requestAnimationFrame(tick);
+            video.srcObject = stream;
+            const track = stream.getVideoTracks()[0];
+            
+            // On attend que la vidéo soit prête
+            video.onloadedmetadata = async () => {
+                status.innerText = "Matériel détecté : Activation Focus...";
+                
+                // On crée l'objet ImageCapture lié à la piste vidéo
+                imageCapture = new ImageCapture(track);
+                
+                // Tentative de configuration hardware forcée
+                await applyHardwareFix(track);
+                
+                // Lancement du cycle de capture haute résolution
+                startCaptureLoop();
             };
+
         } catch (err) {
-            alert("Erreur : " + err.message + "\nVérifiez que vous êtes en HTTPS.");
+            status.innerText = "Erreur : " + err.name;
+            console.error(err);
         }
     }
 
-    async function setupHardware() {
-        if (!currentTrack) return;
-        const caps = currentTrack.getCapabilities();
-        
+    async function applyHardwareFix(track) {
+        const caps = track.getCapabilities();
         const constraints = { advanced: [] };
 
-        // 1. Force Autofocus Continu
+        // Force l'autofocus continu s'il est dispo
         if (caps.focusMode?.includes('continuous')) {
             constraints.advanced.push({ focusMode: 'continuous' });
         }
-
-        // 2. Setup du Zoom
+        
+        // Force un zoom léger (x2.0) pour aider la netteté de loin
         if (caps.zoom) {
-            zoomRange.min = caps.zoom.min;
-            zoomRange.max = caps.zoom.max;
-            
-            // On pré-zoome à 2.5x par défaut (idéal pour QR 3cm sur A54)
-            const defaultZoom = Math.min(2.5, caps.zoom.max);
-            zoomRange.value = defaultZoom;
-            zoomVal.innerText = defaultZoom + "x";
-            constraints.advanced.push({ zoom: defaultZoom });
+            constraints.advanced.push({ zoom: Math.min(2.0, caps.zoom.max) });
         }
 
         try {
-            await currentTrack.applyConstraints(constraints);
-        } catch (e) { console.error("Hardware setup failed", e); }
+            await track.applyConstraints(constraints);
+        } catch (e) { console.warn("Contraintes ignorées"); }
     }
 
-    // Mise à jour manuelle du zoom via le curseur
-    zoomRange.oninput = async (e) => {
-        const val = parseFloat(e.target.value);
-        zoomVal.innerText = val.toFixed(1) + "x";
-        if (currentTrack) {
-            await currentTrack.applyConstraints({ advanced: [{ zoom: val }] });
-        }
-    };
+    function startCaptureLoop() {
+        // Au lieu de lire le flux video flou, on capture une "frame" nette
+        // toutes les 500ms (assez rapide pour être fluide, assez lent pour laisser le focus bosser)
+        scanInterval = setInterval(async () => {
+            if (!isScanning) return;
 
-    function tick() {
-        if (isScanning && video.readyState === video.HAVE_ENOUGH_DATA) {
-            const vW = video.videoWidth;
-            const vH = video.videoHeight;
-            canvas.canvas.width = vW;
-            canvas.canvas.height = vH;
-            
-            // On dessine la frame
-            canvas.drawImage(video, 0, 0, vW, vH);
-            
-            const imageData = canvas.getImageData(0, 0, vW, vH);
-            const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: "dontInvert",
-            });
+            try {
+                // grabFrame() récupère une ImageBitmap de meilleure qualité que le stream video
+                const bitmap = await imageCapture.grabFrame();
+                
+                canvas.width = bitmap.width;
+                canvas.height = bitmap.height;
+                ctx.drawImage(bitmap, 0, 0);
 
-            if (code && code.data !== "") {
-                onDetected(code.data);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: "dontInvert",
+                });
+
+                if (code && code.data) {
+                    onSuccess(code.data);
+                }
+                
+                // Libération mémoire
+                bitmap.close();
+                
+            } catch (e) {
+                // Si grabFrame échoue (en cours de focus), on fallback sur la vidéo classique
+                analyzeVideoFallback();
             }
-        }
-        if (isScanning) requestAnimationFrame(tick);
+        }, 500);
     }
 
-    function onDetected(data) {
+    function analyzeVideoFallback() {
+        if (!isScanning) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        if (code) onSuccess(code.data);
+    }
+
+    function onSuccess(data) {
         isScanning = false;
-        if (navigator.vibrate) navigator.vibrate(150);
+        clearInterval(scanInterval);
+        if (navigator.vibrate) navigator.vibrate(200);
         
         resultText.innerText = data;
-        resultPopup.classList.add('show');
+        resultPopup.style.display = 'block';
+        status.innerText = "QR Code trouvé !";
     }
 
-    function resetScan() {
-        resultPopup.classList.remove('show');
+    function restartScan() {
+        resultPopup.style.display = 'none';
         isScanning = true;
-        requestAnimationFrame(tick);
+        status.innerText = "Scan en cours...";
+        startCaptureLoop();
     }
 
-    window.onload = initCamera;
+    window.onload = startRadicalScanner;
 </script>
+
 </body>
 </html>

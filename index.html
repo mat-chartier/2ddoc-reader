@@ -675,72 +675,101 @@ document.getElementById('btnManual').addEventListener('click', function() {
   // ═══════════════════════════════════════════════════════════════
   btnCamera.addEventListener('click', startCamera);
 
-  function getZXingMultiReader() {
+  // ── Helpers ZXing (fallback) ────────────────────────────────────
+  function decodeImageDataZXing(imageData, w, h) {
     var ZXingLib = window.ZXingLibrary || window.ZXing;
     if (!ZXingLib || !ZXingLib.MultiFormatReader) return null;
-    var hints = new Map();
-    hints.set(ZXingLib.DecodeHintType.TRY_HARDER, true);
-    hints.set(ZXingLib.DecodeHintType.POSSIBLE_FORMATS, [ZXingLib.BarcodeFormat.QR_CODE]);
-    var r = new ZXingLib.MultiFormatReader();
-    r.setHints(hints);
-    return { reader: r, lib: ZXingLib };
-  }
-
-  function decodeImageDataZXing(imageData, w, h) {
-    var z = getZXingMultiReader();
-    if (!z) return null;
     try {
-      var lum = new z.lib.RGBLuminanceSource(imageData.data, w, h);
-      var bmp = new z.lib.BinaryBitmap(new z.lib.HybridBinarizer(lum));
-      var result = z.reader.decode(bmp);
+      var hints = new Map();
+      hints.set(ZXingLib.DecodeHintType.TRY_HARDER, true);
+      hints.set(ZXingLib.DecodeHintType.POSSIBLE_FORMATS, [ZXingLib.BarcodeFormat.QR_CODE]);
+      var r = new ZXingLib.MultiFormatReader();
+      r.setHints(hints);
+      var lum = new ZXingLib.RGBLuminanceSource(imageData.data, w, h);
+      var bmp = new ZXingLib.BinaryBitmap(new ZXingLib.HybridBinarizer(lum));
+      var result = r.decode(bmp);
       return result ? result.getText() : null;
     } catch(e) { return null; }
   }
 
+  // ── Caméra ──────────────────────────────────────────────────────
+  var barcodeDetector = null;
+  var scanTimer = null;
+  var SCAN_INTERVAL_MS = 400; // laisser l'autofocus respirer entre chaque essai
+
   function startCamera() {
     if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
+
+    // Instancier BarcodeDetector si dispo (Chrome Android, Safari 17+)
+    if ('BarcodeDetector' in window) {
+      try { barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] }); } catch(e) {}
+    }
+
     navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        video: {
+          facingMode: { ideal: 'environment' },
+          width:  { ideal: 1920 },
+          height: { ideal: 1080 }
+        }
       })
       .then(function(s) {
         stream = s; video.srcObject = s; video.play();
         scanning = true;
         btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
-        scanStatus.textContent = 'Initialisation...';
+
+        var engine = barcodeDetector ? 'BarcodeDetector natif' : 'ZXing';
+        scanStatus.textContent = 'Initialisation ' + engine + '...';
+
         video.addEventListener('loadedmetadata', function onMeta() {
           video.removeEventListener('loadedmetadata', onMeta);
-          scanStatus.textContent = 'Caméra ' + video.videoWidth + 'x' + video.videoHeight + ' — Pointez vers un QR Code';
+          scanStatus.textContent = (barcodeDetector ? '📷 Natif' : '📷 ZXing')
+            + ' · ' + video.videoWidth + 'x' + video.videoHeight
+            + ' — Pointez vers un QR Code';
+          // Laisser 800ms à l'autofocus avant le 1er scan
+          scanTimer = setTimeout(scanTick, 800);
         });
-        requestAnimationFrame(scanFrame);
       })
       .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });
   }
 
-  function scanFrame() {
+  function scanTick() {
     if (!scanning) return;
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    if (video.readyState < video.HAVE_ENOUGH_DATA || !video.videoWidth) {
+      scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
+      return;
+    }
+
+    if (barcodeDetector) {
+      // ── Voie 1 : BarcodeDetector natif (async, gère l'autofocus) ──
+      barcodeDetector.detect(video)
+        .then(function(codes) {
+          if (!scanning) return;
+          if (codes.length > 0) {
+            handleDetected(codes[0].rawValue);
+          } else {
+            scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
+          }
+        })
+        .catch(function() {
+          if (scanning) scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
+        });
+    } else {
+      // ── Voie 2 : ZXing sur canvas (ralenti pour laisser l'autofocus) ──
       var vw = video.videoWidth, vh = video.videoHeight;
-      if (vw > 0) {
-        scanCanvas.width = vw; scanCanvas.height = vh;
-        ctx.drawImage(video, 0, 0);
-
-        // Essai ZXing (TRY_HARDER) sur frame complet
-        var decoded = decodeImageDataZXing(ctx.getImageData(0,0,vw,vh), vw, vh);
-
-        // Fallback jsQR si ZXing pas encore chargé
-        if (!decoded && typeof jsQR !== 'undefined') {
-          var c = jsQR(ctx.getImageData(0,0,vw,vh).data, vw, vh, { inversionAttempts: 'attemptBoth' });
-          if (c) decoded = c.data;
-        }
-
-        if (decoded) { handleDetected(decoded); return; }
+      scanCanvas.width = vw; scanCanvas.height = vh;
+      ctx.drawImage(video, 0, 0);
+      var decoded = decodeImageDataZXing(ctx.getImageData(0, 0, vw, vh), vw, vh);
+      if (decoded) {
+        handleDetected(decoded);
+      } else {
+        scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
       }
     }
-    rafId = requestAnimationFrame(scanFrame);
   }
 
   function stopCamera() {
     scanning = false;
+    if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
     if (rafId) cancelAnimationFrame(rafId);
     if (stream) { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
     video.srcObject = null;

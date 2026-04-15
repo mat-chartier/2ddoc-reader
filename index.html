@@ -46,7 +46,7 @@
     position: relative; width: 100%; aspect-ratio: 1;
     background: #000; border-radius: 8px; overflow: hidden;
   }
-  video { width: 100%; height: 100%; object-fit: cover; }
+  video { width: 100%; height: 100%; object-fit: cover; transform-origin: center center; transition: transform 0.2s; }
   canvas#scanCanvas { display: none; }
 
   .scan-overlay {
@@ -65,6 +65,13 @@
     text-align: center; color: #fff; font-size: 13px;
     background: rgba(0,0,0,0.5); padding: 6px;
   }
+  .zoom-bar {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 0.6rem; padding: 0 2px;
+  }
+  .zoom-bar label { font-size: 13px; color: #888; white-space: nowrap; min-width: 60px; }
+  .zoom-bar input[type=range] { flex: 1; accent-color: #1a1a1a; }
+  .zoom-val { font-size: 13px; color: #1a1a1a; font-weight: 500; min-width: 32px; text-align: right; }
 
   .btn {
     display: inline-flex; align-items: center; gap: 6px;
@@ -180,7 +187,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.2</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.4</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -192,6 +199,11 @@
         <canvas id="scanCanvas"></canvas>
         <div class="scan-overlay"><div class="scan-frame"></div></div>
         <div class="scan-status" id="scanStatus">Pointez vers un QR Code 2D-DOC</div>
+      </div>
+      <div class="zoom-bar">
+        <label>🔍 Zoom</label>
+        <input type="range" id="zoomRange" min="1" max="4" step="0.1" value="1.5">
+        <span class="zoom-val" id="zoomVal">×1.5</span>
       </div>
     </div>
 
@@ -299,11 +311,23 @@ document.head.appendChild(zxingLibScript);
   var dropZone   = document.getElementById('dropZone');
   var fileInput  = document.getElementById('fileInput');
   var resultDiv  = document.getElementById('result');
+  var zoomRange  = document.getElementById('zoomRange');
+  var zoomVal    = document.getElementById('zoomVal');
 
   var stream   = null;
   var scanning = false;
   var rafId    = null;
   var ctx      = scanCanvas.getContext('2d');
+  var currentZoom = 1.5;
+
+  // Zoom CSS sur la vidéo (visuel uniquement — le canvas capture la résolution native)
+  function applyZoom(z) {
+    currentZoom = z;
+    video.style.transform = 'scale(' + z + ')';
+    zoomVal.textContent = '×' + z.toFixed(1);
+  }
+  applyZoom(1.5);
+  zoomRange.addEventListener('input', function() { applyZoom(parseFloat(zoomRange.value)); });
 
   // ═══════════════════════════════════════════════════════════════
   // BASE45
@@ -754,10 +778,15 @@ document.getElementById('btnManual').addEventListener('click', function() {
           if (scanning) scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
         });
     } else {
-      // ── Voie 2 : ZXing sur canvas (ralenti pour laisser l'autofocus) ──
+      // ── Voie 2 : ZXing sur canvas — capture la zone centrale = zoom ──
       var vw = video.videoWidth, vh = video.videoHeight;
+      var z = currentZoom;
+      // La zone visible après zoom CSS correspond à (1/z) de l'image native
+      var cropW = Math.floor(vw / z), cropH = Math.floor(vh / z);
+      var cropX = Math.floor((vw - cropW) / 2), cropY = Math.floor((vh - cropH) / 2);
+      // On étire le crop à la taille complète → plus de pixels = meilleure détection
       scanCanvas.width = vw; scanCanvas.height = vh;
-      ctx.drawImage(video, 0, 0);
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, vw, vh);
       var decoded = decodeImageDataZXing(ctx.getImageData(0, 0, vw, vh), vw, vh);
       if (decoded) {
         handleDetected(decoded);

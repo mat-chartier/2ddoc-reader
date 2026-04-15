@@ -3,167 +3,150 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Scanner Radical - Samsung A54 Fix</title>
+    <title>Sélecteur Caméra - Samsung Fix</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
-        body { margin: 0; background: #000; color: white; font-family: sans-serif; overflow: hidden; height: 100vh; }
-        #app { position: relative; width: 100%; height: 100%; }
-        video { position: absolute; width: 100%; height: 100%; object-fit: cover; opacity: 0.6; }
+        body { margin: 0; background: #000; color: white; font-family: sans-serif; overflow: hidden; }
+        #app { position: relative; width: 100vw; height: 100vh; }
+        video { width: 100%; height: 100%; object-fit: cover; }
         
-        /* Overlay UI */
-        #overlay { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        #scanner-box { width: 250px; height: 250px; border: 3px solid #fff; border-radius: 20px; box-shadow: 0 0 0 100vmax rgba(0,0,0,0.7); position: relative; }
-        #scanner-box::after { content: "MISE AU POINT..."; position: absolute; top: -30px; width: 100%; text-align: center; color: #0f0; font-size: 12px; font-weight: bold; }
+        #ui-layer { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; pointer-events: none; }
         
-        #status { position: absolute; top: 20px; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 20px; color: #0f0; font-size: 14px; }
-        
-        #result-popup { position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%); background: white; color: black; padding: 20px; border-radius: 15px; width: 80%; display: none; z-index: 100; text-align: center; }
-        button { background: #222; color: white; border: none; padding: 12px 25px; border-radius: 8px; margin-top: 15px; width: 100%; font-weight: bold; }
+        /* En-tête : Choix de la caméra */
+        #header { pointer-events: auto; background: rgba(0,0,0,0.7); padding: 15px; text-align: center; }
+        select { background: #333; color: white; padding: 10px; border-radius: 5px; width: 80%; }
+
+        /* Milieu : Zone de visée */
+        #scanner-container { flex: 1; display: flex; align-items: center; justify-content: center; }
+        #box { width: 250px; height: 250px; border: 2px solid #0f0; border-radius: 20px; box-shadow: 0 0 0 1000px rgba(0,0,0,0.5); }
+
+        /* Pied : Infos */
+        #footer { pointer-events: auto; background: rgba(0,0,0,0.7); padding: 20px; text-align: center; }
+        #log { font-size: 11px; color: #aaa; margin-top: 10px; }
     </style>
 </head>
 <body>
 
 <div id="app">
-    <div id="status">Recherche du flux optimal...</div>
     <video id="video" autoplay playsinline></video>
-    <div id="overlay">
-        <div id="scanner-box"></div>
-    </div>
     
-    <div id="result-popup">
-        <div id="result-text" style="word-break: break-all; margin-bottom: 10px;"></div>
-        <button onclick="restartScan()">RESCANNER</button>
+    <div id="ui-layer">
+        <div id="header">
+            <label>Changer de capteur :</label><br><br>
+            <select id="camera-select">
+                <option value="">Chargement des caméras...</option>
+            </select>
+        </div>
+
+        <div id="scanner-container">
+            <div id="box"></div>
+        </div>
+
+        <div id="footer">
+            <div id="status">Prêt au scan</div>
+            <div id="log">Initialisation...</div>
+        </div>
     </div>
 </div>
 
-<canvas id="offscreenCanvas" style="display:none;"></canvas>
+<canvas id="c" style="display:none;"></canvas>
 
 <script>
     const video = document.getElementById('video');
-    const status = document.getElementById('status');
-    const resultPopup = document.getElementById('result-popup');
-    const resultText = document.getElementById('result-text');
-    const canvas = document.getElementById('offscreenCanvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const cameraSelect = document.getElementById('camera-select');
+    const log = document.getElementById('log');
+    const canvas = document.getElementById('c').getContext('2d');
+    
+    let currentStream = null;
 
-    let imageCapture = null;
-    let scanInterval = null;
-    let isScanning = true;
-
-    async function startRadicalScanner() {
+    // 1. Lister toutes les caméras
+    async function getCameras() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: {
-                    facingMode: { exact: "environment" },
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
-                }
+            // On demande d'abord une permission générique pour débloquer les labels
+            const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            tempStream.getTracks().forEach(t => t.stop());
+
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+            cameraSelect.innerHTML = '';
+
+            videoDevices.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                // Sur Samsung, cherche "Main" ou "Camera 0". 
+                // "Camera 2" ou "Wide" est souvent celle qui n'a pas d'AF.
+                option.text = device.label || `Caméra ${index + 1}`;
+                cameraSelect.appendChild(option);
             });
 
-            video.srcObject = stream;
-            const track = stream.getVideoTracks()[0];
-            
-            // On attend que la vidéo soit prête
-            video.onloadedmetadata = async () => {
-                status.innerText = "Matériel détecté : Activation Focus...";
-                
-                // On crée l'objet ImageCapture lié à la piste vidéo
-                imageCapture = new ImageCapture(track);
-                
-                // Tentative de configuration hardware forcée
-                await applyHardwareFix(track);
-                
-                // Lancement du cycle de capture haute résolution
-                startCaptureLoop();
-            };
+            // Sélectionner la dernière par défaut (souvent la principale sur Android)
+            if (videoDevices.length > 0) {
+                cameraSelect.value = videoDevices[videoDevices.length - 1].deviceId;
+                startStream(videoDevices[videoDevices.length - 1].deviceId);
+            }
 
-        } catch (err) {
-            status.innerText = "Erreur : " + err.name;
-            console.error(err);
+        } catch (e) {
+            log.innerText = "Erreur listing: " + e.message;
         }
     }
 
-    async function applyHardwareFix(track) {
-        const caps = track.getCapabilities();
-        const constraints = { advanced: [] };
+    // 2. Démarrer un flux spécifique
+    async function startStream(deviceId) {
+        if (currentStream) {
+            currentStream.getTracks().forEach(t => t.stop());
+        }
 
-        // Force l'autofocus continu s'il est dispo
-        if (caps.focusMode?.includes('continuous')) {
-            constraints.advanced.push({ focusMode: 'continuous' });
-        }
-        
-        // Force un zoom léger (x2.0) pour aider la netteté de loin
-        if (caps.zoom) {
-            constraints.advanced.push({ zoom: Math.min(2.0, caps.zoom.max) });
-        }
+        log.innerText = "Connexion au capteur...";
+
+        const constraints = {
+            video: {
+                deviceId: { exact: deviceId },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 }
+            }
+        };
 
         try {
-            await track.applyConstraints(constraints);
-        } catch (e) { console.warn("Contraintes ignorées"); }
-    }
+            currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+            video.srcObject = currentStream;
+            
+            const track = currentStream.getVideoTracks()[0];
+            const caps = track.getCapabilities();
+            
+            log.innerText = `Focus: ${caps.focusMode ? caps.focusMode.join(',') : 'Non supporté'}`;
 
-    function startCaptureLoop() {
-        // Au lieu de lire le flux video flou, on capture une "frame" nette
-        // toutes les 500ms (assez rapide pour être fluide, assez lent pour laisser le focus bosser)
-        scanInterval = setInterval(async () => {
-            if (!isScanning) return;
-
-            try {
-                // grabFrame() récupère une ImageBitmap de meilleure qualité que le stream video
-                const bitmap = await imageCapture.grabFrame();
-                
-                canvas.width = bitmap.width;
-                canvas.height = bitmap.height;
-                ctx.drawImage(bitmap, 0, 0);
-
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                    inversionAttempts: "dontInvert",
-                });
-
-                if (code && code.data) {
-                    onSuccess(code.data);
-                }
-                
-                // Libération mémoire
-                bitmap.close();
-                
-            } catch (e) {
-                // Si grabFrame échoue (en cours de focus), on fallback sur la vidéo classique
-                analyzeVideoFallback();
+            // On tente d'activer l'AF
+            if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
             }
-        }, 500);
+
+        } catch (e) {
+            log.innerText = "Erreur démarrage: " + e.message;
+        }
     }
 
-    function analyzeVideoFallback() {
-        if (!isScanning) return;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
-        if (code) onSuccess(code.data);
+    // 3. Boucle de scan
+    function scan() {
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.canvas.width = video.videoWidth;
+            canvas.canvas.height = video.videoHeight;
+            canvas.drawImage(video, 0, 0);
+            const imgData = canvas.getImageData(0, 0, canvas.canvas.width, canvas.canvas.height);
+            const code = jsQR(imgData.data, imgData.width, imgData.height);
+            
+            if (code) {
+                document.getElementById('status').innerText = "CODE: " + code.data;
+                document.getElementById('status').style.color = "#0f0";
+                if (navigator.vibrate) navigator.vibrate(100);
+            }
+        }
+        requestAnimationFrame(scan);
     }
 
-    function onSuccess(data) {
-        isScanning = false;
-        clearInterval(scanInterval);
-        if (navigator.vibrate) navigator.vibrate(200);
-        
-        resultText.innerText = data;
-        resultPopup.style.display = 'block';
-        status.innerText = "QR Code trouvé !";
-    }
+    cameraSelect.onchange = () => startStream(cameraSelect.value);
 
-    function restartScan() {
-        resultPopup.style.display = 'none';
-        isScanning = true;
-        status.innerText = "Scan en cours...";
-        startCaptureLoop();
-    }
-
-    window.onload = startRadicalScanner;
+    getCameras();
+    requestAnimationFrame(scan);
 </script>
-
 </body>
 </html>

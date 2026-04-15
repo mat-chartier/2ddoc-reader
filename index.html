@@ -180,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.3</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.4</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -714,16 +714,21 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
   // ═══════════════════════════════════════════════════════════════
   var imageCapture = null;
   var photoTimer   = null;
-  var PHOTO_INTERVAL_MS = 2000; // prendre une photo toutes les 2s
+  var PHOTO_INTERVAL_MS = 2000;
 
   btnCamera.addEventListener('click', startCamera);
 
   function startCamera() {
     if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
+
+    // Forcer le capteur principal (grand angle) via une résolution qui l'identifie
+    // L'ultra grand angle Samsung ne supporte généralement pas 4:3 en haute résolution
     navigator.mediaDevices.getUserMedia({
       video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1920 }, height: { ideal: 1080 }
+        facingMode: { exact: 'environment' }, // exact force la caméra arrière principale
+        width:  { min: 1280, ideal: 1920, max: 3840 },
+        height: { min:  720, ideal: 1080, max: 2160 },
+        aspectRatio: { ideal: 1.7778 } // 16:9 — caractéristique du capteur principal
       }
     })
     .then(function(s) {
@@ -732,19 +737,70 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
       btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
 
       var track = s.getVideoTracks()[0];
-      if (track && ('ImageCapture' in window)) {
-        try { imageCapture = new ImageCapture(track); } catch(e) { imageCapture = null; }
+
+      // Afficher quel capteur a été sélectionné
+      if (track) {
+        var settings = track.getSettings ? track.getSettings() : {};
+        var caps     = track.getCapabilities ? track.getCapabilities() : {};
+        var label    = track.label || 'inconnu';
+        scanStatus.textContent = '⚙ ' + label.slice(0, 40)
+          + ' · ' + (settings.width||'?') + 'x' + (settings.height||'?')
+          + ' · focus:' + (settings.focusMode || '?');
+
+        // Appliquer focus continu APRÈS 1.5s — quand le flux est stabilisé
+        setTimeout(function() {
+          if (!track || !caps.focusMode) return;
+          var constraints = {};
+          if (caps.focusMode.indexOf('continuous') >= 0)
+            constraints.focusMode = 'continuous';
+          if (caps.exposureMode && caps.exposureMode.indexOf('continuous') >= 0)
+            constraints.exposureMode = 'continuous';
+          if (caps.whiteBalanceMode && caps.whiteBalanceMode.indexOf('continuous') >= 0)
+            constraints.whiteBalanceMode = 'continuous';
+          if (Object.keys(constraints).length) {
+            track.applyConstraints({ advanced: [constraints] })
+              .then(function() {
+                var s2 = track.getSettings();
+                scanStatus.textContent = '✅ focus:' + (s2.focusMode||'?') + ' · prêt';
+              })
+              .catch(function(e) {
+                scanStatus.textContent = '⚠ focus non appliqué: ' + e.message;
+              });
+          }
+        }, 1500);
+
+        if ('ImageCapture' in window) {
+          try { imageCapture = new ImageCapture(track); } catch(e) { imageCapture = null; }
+        }
       }
 
       video.addEventListener('loadedmetadata', function onMeta() {
         video.removeEventListener('loadedmetadata', onMeta);
-        var mode = imageCapture ? '📷 takePhoto' : '🎞 jsQR live';
-        scanStatus.textContent = mode + ' · ' + video.videoWidth + 'x' + video.videoHeight + ' — Pointez vers un QR Code';
-        // Laisser 1.5s à l'autofocus avant la première tentative
-        photoTimer = setTimeout(photoTick, 1500);
+        // Démarrer les captures photo après 2.5s (focus stabilisé)
+        photoTimer = setTimeout(photoTick, 2500);
       });
     })
-    .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });
+    .catch(function(err) {
+      // Si exact:'environment' échoue, retenter avec ideal
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      })
+      .then(function(s) {
+        stream = s; video.srcObject = s; video.play();
+        scanning = true;
+        btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
+        var track = s.getVideoTracks()[0];
+        if (track && 'ImageCapture' in window) {
+          try { imageCapture = new ImageCapture(track); } catch(e) {}
+        }
+        scanStatus.textContent = '📷 Mode fallback · pointez vers un QR Code';
+        video.addEventListener('loadedmetadata', function onMeta() {
+          video.removeEventListener('loadedmetadata', onMeta);
+          photoTimer = setTimeout(photoTick, 2500);
+        });
+      })
+      .catch(function(e2) { alert('Impossible d\'accéder à la caméra : ' + e2.message); });
+    });
   }
 
   function photoTick() {

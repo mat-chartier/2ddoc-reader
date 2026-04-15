@@ -1,152 +1,959 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Sélecteur Caméra - Samsung Fix</title>
-    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
-    <style>
-        body { margin: 0; background: #000; color: white; font-family: sans-serif; overflow: hidden; }
-        #app { position: relative; width: 100vw; height: 100vh; }
-        video { width: 100%; height: 100%; object-fit: cover; }
-        
-        #ui-layer { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; pointer-events: none; }
-        
-        /* En-tête : Choix de la caméra */
-        #header { pointer-events: auto; background: rgba(0,0,0,0.7); padding: 15px; text-align: center; }
-        select { background: #333; color: white; padding: 10px; border-radius: 5px; width: 80%; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js"></script>
+<title>2D-DOC Reader</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
-        /* Milieu : Zone de visée */
-        #scanner-container { flex: 1; display: flex; align-items: center; justify-content: center; }
-        #box { width: 250px; height: 250px; border: 2px solid #0f0; border-radius: 20px; box-shadow: 0 0 0 1000px rgba(0,0,0,0.5); }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #f5f5f0;
+    color: #1a1a1a;
+    min-height: 100vh;
+    padding: 1rem;
+  }
 
-        /* Pied : Infos */
-        #footer { pointer-events: auto; background: rgba(0,0,0,0.7); padding: 20px; text-align: center; }
-        #log { font-size: 11px; color: #aaa; margin-top: 10px; }
-    </style>
+  h1 { font-size: 20px; font-weight: 500; margin-bottom: 0.25rem; color: #1a1a1a; }
+  .subtitle { font-size: 13px; color: #888; margin-bottom: 1.5rem; }
+
+  h2 {
+    font-size: 14px; font-weight: 500; color: #555;
+    text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem;
+  }
+
+  .container { max-width: 700px; margin: 0 auto; }
+
+  .card {
+    background: #fff;
+    border: 0.5px solid rgba(0,0,0,0.12);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .card-warn {
+    background: #fffdf0;
+    border: 0.5px solid rgba(180,130,0,0.3);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .scan-area {
+    position: relative; width: 100%; aspect-ratio: 1;
+    background: #000; border-radius: 8px; overflow: hidden;
+  }
+  video { width: 100%; height: 100%; object-fit: cover; }
+  canvas#scanCanvas { display: none; }
+
+  .scan-overlay {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  .scan-frame {
+    width: 60%; aspect-ratio: 1;
+    border: 2px solid rgba(255,255,255,0.7);
+    border-radius: 8px;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,0.35);
+  }
+  .scan-status {
+    position: absolute; bottom: 12px; left: 0; right: 0;
+    text-align: center; color: #fff; font-size: 13px;
+    background: rgba(0,0,0,0.5); padding: 6px;
+  }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border: 0.5px solid rgba(0,0,0,0.2);
+    border-radius: 8px; background: #fff; font-size: 14px;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .btn:hover { background: #f5f5f0; }
+  .btn.primary { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  .btn.primary:hover { background: #333; }
+
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 1rem; }
+
+  .field-row {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 6px 0; border-bottom: 0.5px solid rgba(0,0,0,0.06); font-size: 14px;
+  }
+  .field-row:last-child { border-bottom: none; }
+  .field-label { color: #888; min-width: 130px; flex-shrink: 0; font-size: 13px; }
+  .field-value { color: #1a1a1a; word-break: break-all; }
+
+  .badge {
+    display: inline-block; font-size: 11px;
+    padding: 2px 8px; border-radius: 20px; font-weight: 500;
+  }
+  .badge.ok   { background: #eaf3de; color: #3b6d11; }
+  .badge.warn { background: #faeeda; color: #854f0b; }
+  .badge.err  { background: #fcebeb; color: #a32d2d; }
+
+  .section-title {
+    font-size: 12px; font-weight: 500; color: #888;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin: 1rem 0 0.5rem; padding-bottom: 4px;
+    border-bottom: 0.5px solid rgba(0,0,0,0.08);
+  }
+
+  .raw-string {
+    font-family: monospace; font-size: 11px;
+    background: #f5f5f0; border-radius: 6px;
+    padding: 8px; word-break: break-all; color: #555; margin-top: 8px;
+  }
+
+  .array-item {
+    background: #f9f9f7; border: 0.5px solid rgba(0,0,0,0.08);
+    border-radius: 6px; padding: 8px 10px; margin: 4px 0;
+  }
+
+  #dropZone {
+    border: 1.5px dashed rgba(0,0,0,0.2); border-radius: 8px;
+    padding: 2rem; text-align: center; color: #888; font-size: 14px;
+    cursor: pointer; transition: border-color 0.15s, background 0.15s;
+  }
+  #dropZone:hover, #dropZone.drag-over { border-color: #1a1a1a; background: #f0f0ea; }
+  #fileInput { display: none; }
+
+  .hidden { display: none !important; }
+
+  #result { animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  .type-tag { font-size: 10px; color: #aaa; font-family: monospace; margin-left: 4px; }
+
+  /* Chaîne de confiance */
+  .chain-step {
+    display: flex; gap: 0.7em; padding: 0.5em 0;
+    border-bottom: 0.5px solid rgba(0,0,0,0.06); font-size: 13px;
+  }
+  .chain-step:last-child { border-bottom: none; }
+  .step-num {
+    background: #e0a020; color: white; border-radius: 50%;
+    width: 1.5em; height: 1.5em; display: flex; align-items: center;
+    justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .step-title { font-weight: 600; color: #1a1a1a; margin-bottom: 2px; }
+  .step-url { font-family: monospace; font-size: 11px; word-break: break-all; }
+  .step-url a { color: #0066cc; text-decoration: none; }
+  .step-url a:hover { text-decoration: underline; }
+  .step-desc { color: #888; font-size: 12px; font-style: italic; margin-top: 2px; }
+
+  .demo-note {
+    background: #fff8e6; border: 1px solid #f0c060;
+    border-radius: 6px; padding: 0.7em 0.9em;
+    font-size: 13px; color: #7a5000; margin-bottom: 0.8em; line-height: 1.5;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    body { background: #1a1a1a; color: #e8e8e0; }
+    .card { background: #2a2a2a; border-color: rgba(255,255,255,0.1); }
+    .card-warn { background: #2a2500; border-color: rgba(200,150,0,0.3); }
+    .btn { background: #2a2a2a; color: #e8e8e0; border-color: rgba(255,255,255,0.15); }
+    .btn:hover { background: #333; }
+    .btn.primary { background: #e8e8e0; color: #1a1a1a; }
+    .btn.primary:hover { background: #ccc; }
+    h1 { color: #e8e8e0; }
+    h2 { color: #999; }
+    .field-value { color: #e8e8e0; }
+    .field-label { color: #888; }
+    .raw-string { background: #333; color: #aaa; }
+    .array-item { background: #333; border-color: rgba(255,255,255,0.08); }
+    #dropZone { border-color: rgba(255,255,255,0.2); color: #888; }
+    #dropZone:hover { background: #333; border-color: #e8e8e0; }
+    .section-title { color: #666; border-color: rgba(255,255,255,0.08); }
+    .field-row { border-color: rgba(255,255,255,0.06); }
+    .chain-step { border-color: rgba(255,255,255,0.06); }
+    .step-title { color: #e8e8e0; }
+    .badge.ok  { background: #173404; color: #c0dd97; }
+    .badge.warn{ background: #412402; color: #fac775; }
+    .badge.err { background: #501313; color: #f09595; }
+    .demo-note { background: #2a2000; border-color: #806010; color: #d4a040; }
+  }
+</style>
 </head>
 <body>
+<div class="container">
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.5</span></h1>
+  <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
-<div id="app">
-    <video id="video" autoplay playsinline></video>
-    
-    <div id="ui-layer">
-        <div id="header">
-            <label>Changer de capteur :</label><br><br>
-            <select id="camera-select">
-                <option value="">Chargement des caméras...</option>
-            </select>
-        </div>
+  <div class="card" id="inputCard">
+    <h2>Source</h2>
 
-        <div id="scanner-container">
-            <div id="box"></div>
-        </div>
-
-        <div id="footer">
-            <div id="status">Prêt au scan</div>
-            <div id="log">Initialisation...</div>
-        </div>
+    <!-- ── PHOTO NATIVE — méthode principale sur mobile ── -->
+    <div style="margin-bottom:1rem;">
+      <button class="btn primary" id="btnPhoto" style="width:100%;padding:12px;font-size:15px;">
+        📷 Prendre une photo
+      </button>
+      <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
+      <div style="font-size:12px;color:#888;margin-top:0.4rem;text-align:center;">
+        Ouvre l'appareil photo natif · visez, attendez la mise au point, déclenchez
+      </div>
     </div>
+
+    <div id="cameraSection">
+      <details style="margin-bottom:0.5rem;">
+        <summary style="font-size:13px;color:#888;cursor:pointer;user-select:none;">
+          📹 Caméra live (scan continu)
+        </summary>
+        <div style="margin-top:0.75rem;">
+          <div class="scan-area" id="scanArea">
+            <video id="video" playsinline autoplay muted></video>
+            <canvas id="scanCanvas"></canvas>
+            <div class="scan-overlay"><div class="scan-frame"></div></div>
+            <div class="scan-status" id="scanStatus">Pointez vers un QR Code 2D-DOC</div>
+          </div>
+          <div class="zoom-bar">
+            <label>🔍 Zoom</label>
+            <input type="range" id="zoomRange" min="1" max="4" step="0.1" value="1.5">
+            <span class="zoom-val" id="zoomVal">×1.5</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" id="btnCamera">Activer la caméra</button>
+            <button class="btn" id="btnStop" style="display:none">Arrêter</button>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div id="dropZone" style="margin-top:1rem;">
+      <div>Déposez une image QR Code ici</div>
+      <div style="font-size:12px;margin-top:4px;">ou cliquez pour choisir un fichier</div>
+      <input type="file" id="fileInput" accept="image/*">
+    </div>
+
+<div style="margin-top:1rem;">
+  <div style="font-size:13px; color:#888; margin-bottom:0.4em;">
+    Ou coller directement la chaîne 2D-DOC
+  </div>
+  <textarea id="manualInput" rows="3"
+    style="width:100%; font-family:monospace; font-size:11px;
+           padding:0.5em; border:1px solid rgba(0,0,0,0.2);
+           border-radius:6px; resize:vertical; background:#fafaf8;"
+    placeholder="KFRMI6..."></textarea>
+  <button class="btn primary" id="btnManual"
+    style="margin-top:0.5em; width:100%;">
+    Décoder
+  </button>
 </div>
 
-<canvas id="c" style="display:none;"></canvas>
+    <div class="btn-row">
+      <button class="btn" id="btnReset" style="display:none">🔄 Nouveau scan</button>
+    </div>
+  </div>
+
+  <div id="result" class="hidden"></div>
+</div>
 
 <script>
-    const video = document.getElementById('video');
-    const cameraSelect = document.getElementById('camera-select');
-    const log = document.getElementById('log');
-    const canvas = document.getElementById('c').getContext('2d');
-    
-    let currentStream = null;
+// On charge jsQR depuis jsdelivr — fonctionne dans tous les navigateurs
+var jsQRScript = document.createElement('script');
+jsQRScript.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+document.head.appendChild(jsQRScript);
 
-    // 1. Lister toutes les caméras
-    async function getCameras() {
-        try {
-            // On demande d'abord une permission générique pour débloquer les labels
-            const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            tempStream.getTracks().forEach(t => t.stop());
+(function() {
 
-            const videoDevices = devices.filter(d => d.kind === 'videoinput');
-            cameraSelect.innerHTML = '';
+  // ═══════════════════════════════════════════════════════════════
+  // CLÉ PUBLIQUE — embarquée pour la démo
+  // En production : récupérée depuis la TSL ANTS via chaîne de confiance
+  // ═══════════════════════════════════════════════════════════════
+  var PUBLIC_KEY_PEM = [
+    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnrqXlcwBG+pXd0Pu7QEVTvfxqQJN',
+    'LZSXSqLcTh9tRnBPY7y+reGMxD96ELe3/FqcjIFMGquLCfgmw4HLgGU0uA=='
+  ].join('');
 
-            videoDevices.forEach((device, index) => {
-                const option = document.createElement('option');
-                option.value = device.deviceId;
-                // Sur Samsung, cherche "Main" ou "Camera 0". 
-                // "Camera 2" ou "Wide" est souvent celle qui n'a pas d'AF.
-                option.text = device.label || `Caméra ${index + 1}`;
-                cameraSelect.appendChild(option);
-            });
+  // ═══════════════════════════════════════════════════════════════
+  // MANIFEST 000500 — embarqué depuis pub.ants.gouv.fr
+  // https://pub.ants.gouv.fr/2D-DOC/V2/QLF/04_MANIFESTS/KFR/MI/6_ISO22376/000500.xml
+  // ═══════════════════════════════════════════════════════════════
+  var MANIFEST = {
+    id: '000500',
+    name: 'Assurance Maladie et Complémentaire Santé',
+    description: 'Attestation de droits',
+    fields: [
+      { name: 'Validité',        type: 'OBJECT',       nillable: false, objectType: 'validityTypeDefinition' },
+      { name: 'NIR Assuré',      type: 'STRING',       nillable: false },
+      { name: 'Médecin TT',      type: 'BOOLEAN',      nillable: true  },
+      { name: 'C2S',             type: 'OBJECT',       nillable: true,  objectType: 'C2STypeDefinition' },
+      { name: 'Message Famille', type: 'STRING',       nillable: true,  dict: 'MessageFamilleDictionnary' },
+      { name: 'Bénéficiaire',    type: 'OBJECT_ARRAY', nillable: false, objectType: 'BénéficiaireTypeDefinition' },
+      { name: 'Avertissement',   type: 'STRING',       nillable: false },
+    ],
+    types: {
+      validityTypeDefinition: [
+        { name: 'Date de début', type: 'DATE' },
+        { name: 'Date de fin',   type: 'DATE' },
+      ],
+      C2STypeDefinition: [
+        { name: 'Date de début', type: 'DATE' },
+        { name: 'Date de fin',   type: 'DATE' },
+      ],
+      BénéficiaireTypeDefinition: [
+        { name: 'Nom',                  type: 'STRING' },
+        { name: 'Prénoms',              type: 'STRING' },
+        { name: 'NIR',                  type: 'STRING' },
+        { name: 'Date de naissance',    type: 'STRING' },
+        { name: 'Rang',                 type: 'STRING' },
+        { name: 'Message Bénéficiaire', type: 'STRING_ARRAY', dict: 'MessageBénéficiaireDictionnary' },
+      ],
+    },
+    dicts: {
+      MessageFamilleDictionnary:       { '1': 'Message 1', '2': 'Message 2', '3': 'Message 3' },
+      MessageBénéficiaireDictionnary:  { '1': 'Message 1', '2': 'Message 2', '3': 'Message 3' },
+    },
+  };
 
-            // Sélectionner la dernière par défaut (souvent la principale sur Android)
-            if (videoDevices.length > 0) {
-                cameraSelect.value = videoDevices[videoDevices.length - 1].deviceId;
-                startStream(videoDevices[videoDevices.length - 1].deviceId);
-            }
+  // ═══════════════════════════════════════════════════════════════
+  // DOM
+  // ═══════════════════════════════════════════════════════════════
+  var video      = document.getElementById('video');
+  var scanCanvas = document.getElementById('scanCanvas');
+  var scanStatus = document.getElementById('scanStatus');
+  var btnCamera  = document.getElementById('btnCamera');
+  var btnStop    = document.getElementById('btnStop');
+  var btnReset   = document.getElementById('btnReset');
+  var dropZone   = document.getElementById('dropZone');
+  var fileInput  = document.getElementById('fileInput');
+  var resultDiv  = document.getElementById('result');
+  var zoomRange  = document.getElementById('zoomRange');
+  var zoomVal    = document.getElementById('zoomVal');
 
-        } catch (e) {
-            log.innerText = "Erreur listing: " + e.message;
-        }
+  var stream   = null;
+  var scanning = false;
+  var rafId    = null;
+  var ctx      = scanCanvas.getContext('2d');
+  var currentZoom = 1.5;
+
+  function applyZoom(z) {
+    currentZoom = z;
+    video.style.transform = 'scale(' + z + ')';
+    zoomVal.textContent = '×' + z.toFixed(1);
+  }
+  applyZoom(1.5);
+  zoomRange.addEventListener('input', function() { applyZoom(parseFloat(zoomRange.value)); });
+
+  // ═══════════════════════════════════════════════════════════════
+  // BASE45
+  // ═══════════════════════════════════════════════════════════════
+  var B45 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+
+  function base45Decode(str) {
+    var out = [], i = 0;
+    while (i < str.length) {
+      if (i + 2 < str.length) {
+        var a = B45.indexOf(str[i]), b = B45.indexOf(str[i+1]), c = B45.indexOf(str[i+2]);
+        if (a < 0 || b < 0 || c < 0) throw new Error('Caractère Base45 invalide à ' + i);
+        var v = a + b * 45 + c * 45 * 45;
+        out.push((v >> 8) & 0xFF); out.push(v & 0xFF);
+        i += 3;
+      } else if (i + 1 < str.length) {
+        var a2 = B45.indexOf(str[i]), b2 = B45.indexOf(str[i+1]);
+        if (a2 < 0 || b2 < 0) throw new Error('Caractère Base45 invalide');
+        out.push((a2 + b2 * 45) & 0xFF); i += 2;
+      } else {
+        throw new Error('Longueur Base45 invalide');
+      }
+    }
+    return new Uint8Array(out);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // C40 DECODE
+  // ═══════════════════════════════════════════════════════════════
+  function c40Decode(bytes, nbChars) {
+    var result = '', i = 0, shift = 0;
+    var SET2 = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`';
+    var SET3 = 'abcdefghijklmnopqrstuvwxyz';
+    while (i + 1 < bytes.length && result.length < nbChars) {
+      var v = ((bytes[i] << 8) | bytes[i+1]) - 1;
+      var c1 = Math.floor(v / 1600), c2 = Math.floor((v % 1600) / 40), c3 = v % 40;
+      [c1, c2, c3].forEach(function(sym) {
+        if (result.length >= nbChars) return;
+        if (shift === 0) {
+          if (sym === 1) shift = 2;
+          else if (sym === 2) shift = 3;
+          else if (sym === 3) result += ' ';
+          else if (sym >= 4 && sym <= 13) result += String.fromCharCode(48 + sym - 4);
+          else if (sym >= 14) result += String.fromCharCode(65 + sym - 14);
+        } else if (shift === 2) { result += SET2[sym - 1] || '?'; shift = 0; }
+        else if (shift === 3) { result += SET3[sym] || '?'; shift = 0; }
+      });
+      i += 2;
+    }
+    return result;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MSGPACK DECODE
+  // ═══════════════════════════════════════════════════════════════
+  function msgDecode(buf, offset) {
+    var b = buf[offset];
+    if (b === 0xC0) return { val: null,  next: offset+1, type: 'nil'   };
+    if (b === 0xC2) return { val: false, next: offset+1, type: 'bool'  };
+    if (b === 0xC3) return { val: true,  next: offset+1, type: 'bool'  };
+    if ((b & 0x80) === 0)   return { val: b,       next: offset+1, type: 'int' };
+    if ((b & 0xE0) === 0xE0) return { val: b-256,  next: offset+1, type: 'int' };
+    if ((b & 0xE0) === 0xA0) { var ls = b & 0x1F; return { val: utf8d(buf, offset+1, ls), next: offset+1+ls, type: 'str' }; }
+    if ((b & 0xF0) === 0x90) { var na = b & 0x0F; return arrDec(buf, offset+1, na); }
+    if (b === 0xCC) return { val: buf[offset+1], next: offset+2, type: 'int' };
+    if (b === 0xCD) return { val: (buf[offset+1]<<8)|buf[offset+2], next: offset+3, type: 'int' };
+    if (b === 0xCE) return { val: ((buf[offset+1]<<24)|(buf[offset+2]<<16)|(buf[offset+3]<<8)|buf[offset+4])>>>0, next: offset+5, type: 'int' };
+    if (b === 0xD0) { var v8=buf[offset+1]; return { val: v8>=128?v8-256:v8, next: offset+2, type: 'int' }; }
+    if (b === 0xD1) { var v16=(buf[offset+1]<<8)|buf[offset+2]; return { val: v16>=32768?v16-65536:v16, next: offset+3, type: 'int' }; }
+    if (b === 0xD2) { return { val: (buf[offset+1]<<24)|(buf[offset+2]<<16)|(buf[offset+3]<<8)|buf[offset+4], next: offset+5, type: 'int' }; }
+    if (b === 0xCA) { var dv32=new DataView(buf.buffer,buf.byteOffset+offset+1,4); return { val: dv32.getFloat32(0,false), next: offset+5, type: 'float' }; }
+    if (b === 0xCB) { var dv64=new DataView(buf.buffer,buf.byteOffset+offset+1,8); return { val: dv64.getFloat64(0,false), next: offset+9, type: 'float' }; }
+    if (b === 0xD9) { var ls8=buf[offset+1]; return { val: utf8d(buf,offset+2,ls8), next: offset+2+ls8, type: 'str' }; }
+    if (b === 0xDA) { var ls16=(buf[offset+1]<<8)|buf[offset+2]; return { val: utf8d(buf,offset+3,ls16), next: offset+3+ls16, type: 'str' }; }
+    if (b === 0xDC) { var na16=(buf[offset+1]<<8)|buf[offset+2]; return arrDec(buf,offset+3,na16); }
+    if (b === 0xDD) { var na32=((buf[offset+1]<<24)|(buf[offset+2]<<16)|(buf[offset+3]<<8)|buf[offset+4])>>>0; return arrDec(buf,offset+5,na32); }
+    return { val: '(0x'+b.toString(16)+')', next: offset+1, type: 'unknown' };
+  }
+
+  function arrDec(buf, offset, n) {
+    var arr = [], cur = offset;
+    for (var i = 0; i < n; i++) { var item = msgDecode(buf, cur); arr.push(item); cur = item.next; }
+    return { val: arr, next: cur, type: 'array' };
+  }
+
+  function utf8d(buf, offset, len) {
+    try { return new TextDecoder('utf-8').decode(buf.slice(offset, offset+len)); }
+    catch(e) { var s=''; for(var i=0;i<len;i++) s+=String.fromCharCode(buf[offset+i]); return s; }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // UTILITAIRES
+  // ═══════════════════════════════════════════════════════════════
+  var REF = new Date(Date.UTC(1900, 0, 1));
+  function daysToDate(d) { return new Date(REF.getTime() + d*86400000).toISOString().slice(0,10); }
+  function tsToDate(ts)  { return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19)+' UTC'; }
+  function b2h(b)        { return ('00'+(b&0xFF).toString(16)).slice(-2); }
+  function toHex(arr)    { var s=''; for(var i=0;i<arr.length;i++) s+=b2h(arr[i]); return s.toUpperCase(); }
+  function esc(s)        { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ═══════════════════════════════════════════════════════════════
+  // VÉRIFICATION SIGNATURE — Web Crypto API
+  // ═══════════════════════════════════════════════════════════════
+ function importPubKey() {
+    var der = Uint8Array.from(atob(PUBLIC_KEY_PEM), function(c){ return c.charCodeAt(0); });
+    return crypto.subtle.importKey('spki', der.buffer,
+        { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+}
+
+  function sha256(data) {
+    return crypto.subtle.digest('SHA-256', data).then(function(h){ return new Uint8Array(h); });
+  }
+
+  function rsToAsnDer(rs) {
+    var r = rs.slice(0,32), s = rs.slice(32,64);
+    if (r[0] & 0x80) r = cat(new Uint8Array([0]), r);
+    if (s[0] & 0x80) s = cat(new Uint8Array([0]), s);
+    while (r.length > 1 && r[0]===0 && !(r[1]&0x80)) r = r.slice(1);
+    while (s.length > 1 && s[0]===0 && !(s[1]&0x80)) s = s.slice(1);
+    var seq = new Uint8Array(6+r.length+s.length), i=0;
+    seq[i++]=0x30; seq[i++]=4+r.length+s.length;
+    seq[i++]=0x02; seq[i++]=r.length; seq.set(r,i); i+=r.length;
+    seq[i++]=0x02; seq[i++]=s.length; seq.set(s,i);
+    return seq.buffer;
+  }
+
+  function cat(a, b) { var c=new Uint8Array(a.length+b.length); c.set(a); c.set(b,a.length); return c; }
+
+function verifySignature(headerBytes, payloadBytes, sigBytes) {
+    return sha256(payloadBytes).then(function(hp) {
+        var concat = cat(headerBytes, hp);
+        return sha256(concat).then(function(hf) {
+            // Utiliser elliptic.js pour NONEwithECDSA
+            var ec  = new elliptic.ec('p256');
+            // Extraire la clé publique depuis le DER SPKI (octets 27 à 91 = 64 octets)
+            var pubDer = Uint8Array.from(atob(PUBLIC_KEY_PEM), function(c){ return c.charCodeAt(0); });
+            var pubKey = ec.keyFromPublic(pubDer.slice(26), 'array');
+
+            // Signature DER → {r, s}
+            var r = toHex(sigBytes.slice(0,32)).toLowerCase();
+            var s = toHex(sigBytes.slice(32,64)).toLowerCase();
+
+            // Vérifier ECDSA sur hash_final sans rehash
+            var ok = pubKey.verify(Array.from(hf), { r: r, s: s });
+            return ok;
+        });
+    });
+}
+
+  // ═══════════════════════════════════════════════════════════════
+  // MAPPING PAYLOAD → MANIFEST
+  // ═══════════════════════════════════════════════════════════════
+  function mapArray(rawArray, fields) {
+    return fields.map(function(f, i) {
+      var raw = (rawArray && i < rawArray.length) ? rawArray[i] : null;
+      return mapField(f, raw ? raw.val : null, raw ? raw.type : 'nil');
+    });
+  }
+
+  function mapField(f, val, type) {
+    if (val === null || val === undefined || type === 'nil') {
+      return { name: f.name, display: null, nil: true };
+    }
+    if (f.type === 'DATE') {
+      return { name: f.name, display: daysToDate(val) };
+    }
+    if (f.type === 'BOOLEAN') {
+      return { name: f.name, display: val ? 'Oui' : 'Non' };
+    }
+    if (f.type === 'STRING' && f.dict) {
+      var d = MANIFEST.dicts[f.dict] || {};
+      return { name: f.name, display: d[val] ? val + ' — ' + d[val] : val };
+    }
+    if (f.type === 'OBJECT' && f.objectType) {
+      var sub = MANIFEST.types[f.objectType] || [];
+      return { name: f.name, children: mapArray(val, sub) };
+    }
+    if (f.type === 'OBJECT_ARRAY' && f.objectType) {
+      var sub2 = MANIFEST.types[f.objectType] || [];
+      var items = (val || []).map(function(item) { return mapArray(item.val || item, sub2); });
+      return { name: f.name, items: items };
+    }
+    if (f.type === 'STRING_ARRAY' && f.dict) {
+      var d2 = MANIFEST.dicts[f.dict] || {};
+      var vals = (val || []).map(function(x) { var v = x.val !== undefined ? x.val : x; return d2[v] ? v+' — '+d2[v] : v; });
+      return { name: f.name, display: vals.join(', ') };
+    }
+    return { name: f.name, display: String(val) };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // RENDU HTML
+  // ═══════════════════════════════════════════════════════════════
+  function fr(label, value, rawLabel) {
+      var l = rawLabel ? label : esc(label);
+      return '<div class="field-row"><span class="field-label">'+l+'</span><span class="field-value">'+value+'</span></div>';
+  }
+
+  function renderMapped(fields) {
+    return fields.map(function(f) {
+      if (f.nil)      return fr(f.name, '<span style="color:#aaa">— (absent)</span>');
+      if (f.children) return fr(f.name, '<div style="margin-top:4px">'+renderMapped(f.children)+'</div>');
+      if (f.items) {
+        var html = '<div style="margin-top:4px">';
+        f.items.forEach(function(item, idx) {
+          html += '<div class="array-item"><div style="font-size:11px;font-weight:600;color:#888;margin-bottom:4px">Bénéficiaire '+(idx+1)+'</div>'+renderMapped(item)+'</div>';
+        });
+        return fr(f.name+'&nbsp;<span class="type-tag">×'+f.items.length+'</span>', html+'</div>', true);
+      }
+      return fr(f.name, esc(f.display));
+    }).join('');
+  }
+
+  function renderResult(rawString, headerBytes, header, payloadBytes, sigBytes, mapped, sigOk, sigErr) {
+    var html = '';
+
+    // Statut signature
+    if (sigOk) {
+      html += '<div class="card"><div style="display:flex;align-items:center;gap:8px;">';
+      html += '<span class="badge ok">✅ Signature ECDSA P-256 valide</span>';
+      html += '<span style="font-size:12px;color:#888">Double passe SHA-256 — spec §2.5</span></div></div>';
+    } else {
+      html += '<div class="card"><div style="display:flex;align-items:center;gap:8px;">';
+      html += '<span class="badge err">❌ Signature invalide</span>';
+      html += '<span style="font-size:12px;color:#888">'+esc(sigErr||'')+'</span></div></div>';
     }
 
-    // 2. Démarrer un flux spécifique
-    async function startStream(deviceId) {
-        if (currentStream) {
-            currentStream.getTracks().forEach(t => t.stop());
-        }
+    // Chaîne de confiance
+    html += '<div class="card-warn">';
+    html += '<h2 style="color:#854f0b">Chaîne de confiance</h2>';
+    html += '<div class="demo-note">⚠ <strong>Version démo — chaîne de confiance non validée dynamiquement.</strong><br>';
+    html += 'La vérification utilise la clé publique embarquée localement (clé de test, en attente de référencement ANTS).<br>';
+    html += 'En production, le lecteur navigue automatiquement dans la chaîne ci-dessous.</div>';
+    html += '<div class="chain-step"><div class="step-num">1</div><div>';
+    html += '<div class="step-title">LOTL Racine France Titres <span class="badge ok" style="font-size:10px">✓ accessible</span></div>';
+    html += '<div class="step-url"><a href="https://pub.ants.gouv.fr/2D-DOC/V2/QLF/00_LOTL_RACINE/lotl_racine_ants_test.xml" target="_blank">https://pub.ants.gouv.fr/2D-DOC/V2/QLF/00_LOTL_RACINE/lotl_racine_ants_test.xml</a></div>';
+    html += '<div class="step-desc">Navigation via Code IAC du PREFIX → KFR</div></div></div>';
+    html += '<div class="chain-step"><div class="step-num">2</div><div>';
+    html += '<div class="step-title">LOTL OSC KFR <span class="badge ok" style="font-size:10px">✓ accessible</span></div>';
+    html += '<div class="step-url"><a href="https://pub.ants.gouv.fr/2D-DOC/V2/QLF/01_LOTLs/KFR/lotl_ants_kfr_test.xml" target="_blank">https://pub.ants.gouv.fr/2D-DOC/V2/QLF/01_LOTLs/KFR/lotl_ants_kfr_test.xml</a></div>';
+    html += '<div class="step-desc">Navigation via CIN + Format → MI / 6</div></div></div>';
+    html += '<div class="chain-step"><div class="step-num">3</div><div>';
+    html += '<div class="step-title">TSL KFR / MI / Format 6 (ISO 22376) <span class="badge ok" style="font-size:10px">✓ accessible</span></div>';
+    html += '<div class="step-url"><a href="https://pub.ants.gouv.fr/2D-DOC/V2/QLF/02_TSLs/KFR/MI/6_ISO22376/tsl_ants_kfrmi6_02_test.xml" target="_blank">https://pub.ants.gouv.fr/2D-DOC/V2/QLF/02_TSLs/KFR/MI/6_ISO22376/tsl_ants_kfrmi6_02_test.xml</a></div>';
+    html += '<div class="step-desc">Navigation via authorityId + certificateId du HEADER → '+esc(header.authorityId)+' / '+esc(header.certificateId)+'</div></div></div>';
+    html += '<div class="chain-step"><div class="step-num">4</div><div>';
+    html += '<div class="step-title">Certificat émetteur <span class="badge warn" style="font-size:10px">⚠ embarqué (démo)</span></div>';
+    html += '<div class="step-url">Autorité <strong>'+esc(header.authorityId)+'</strong> · Certificat <strong>'+esc(header.certificateId)+'</strong></div>';
+    html += '<div class="step-desc">En production : récupéré depuis la TSL ANTS</div></div></div>';
+    html += '<div class="chain-step"><div class="step-num">5</div><div>';
+    html += '<div class="step-title">Manifest 000500 <span class="badge ok" style="font-size:10px">✓ embarqué</span></div>';
+    html += '<div class="step-url"><a href="https://pub.ants.gouv.fr/2D-DOC/V2/QLF/04_MANIFESTS/KFR/MI/6_ISO22376/000500.xml" target="_blank">https://pub.ants.gouv.fr/2D-DOC/V2/QLF/04_MANIFESTS/KFR/MI/6_ISO22376/000500.xml</a></div>';
+    html += '<div class="step-desc">Schéma du PAYLOAD — noms et types des champs</div></div></div>';
+    html += '</div>';
 
-        log.innerText = "Connexion au capteur...";
+    // HEADER
+    html += '<div class="card"><h2>Header</h2>';
+    html += fr('Marqueur', '0xDE');
+    html += fr('Version', 'V3 — 2D-DOC V2 (ISO 22376:2023)');
+    html += fr('IAC', esc(header.iac));
+    html += fr('Authority ID', esc(header.authorityId));
+    html += fr('Certificate ID', esc(header.certificateId));
+    html += fr('Manifest ID', esc(header.manifestId));
+    html += fr('Horodatage', esc(tsToDate(header.timestamp))+' <span style="color:#aaa;font-size:12px">('+header.timestamp+')</span>');
+    html += fr('Longueur PAYLOAD', header.payloadLength + ' octets');
+    html += '<div class="section-title">Hex brut</div><div class="raw-string">'+toHex(headerBytes)+'</div>';
+    html += '</div>';
 
-        const constraints = {
-            video: {
-                deviceId: { exact: deviceId },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 }
-            }
-        };
+    // PAYLOAD
+    html += '<div class="card"><h2>Payload — '+esc(MANIFEST.name)+'</h2>';
+    html += '<div style="font-size:12px;color:#888;margin-bottom:0.75rem">'+esc(MANIFEST.description)+' · Manifest '+MANIFEST.id+'</div>';
+    html += renderMapped(mapped);
+    html += '</div>';
 
-        try {
-            currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-            video.srcObject = currentStream;
-            
-            const track = currentStream.getVideoTracks()[0];
-            const caps = track.getCapabilities();
-            
-            log.innerText = `Focus: ${caps.focusMode ? caps.focusMode.join(',') : 'Non supporté'}`;
+    // SIGNATURE
+    html += '<div class="card"><h2>Signature</h2>';
+    html += fr('Algorithme', 'ECDSA P-256');
+    html += fr('Longueur', '64 octets (r|s)');
+    html += '<div class="section-title">r (32 octets)</div><div class="raw-string">'+toHex(sigBytes.slice(0,32))+'</div>';
+    html += '<div class="section-title">s (32 octets)</div><div class="raw-string">'+toHex(sigBytes.slice(32,64))+'</div>';
+    html += '</div>';
 
-            // On tente d'activer l'AF
-            if (caps.focusMode && caps.focusMode.includes('continuous')) {
-                await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-            }
+    // Chaîne brute
+    html += '<div class="card"><h2>Chaîne 2D-DOC brute</h2>';
+    html += '<div class="raw-string">'+esc(rawString)+'</div></div>';
 
-        } catch (e) {
-            log.innerText = "Erreur démarrage: " + e.message;
-        }
+    return html;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // TRAITEMENT PRINCIPAL
+  // ═══════════════════════════════════════════════════════════════
+  function handleDetected(rawString) {
+    stopCamera();
+    rawString = rawString.trim();
+
+    try {
+      // PREFIX (6 chars) + contenu Base45
+      var prefix = '', b45 = rawString;
+      if (/^[A-Z0-9]{6}/.test(rawString)) { prefix = rawString.slice(0,6); b45 = rawString.slice(6); }
+
+      var bytes = base45Decode(b45);
+      if (bytes.length < 83) throw new Error('Données trop courtes : '+bytes.length+' octets (min 83)');
+
+      // HEADER — 19 octets
+      var hdr = bytes.slice(0, 19);
+      if (hdr[0] !== 0xDE) throw new Error('Marqueur invalide : 0x'+hdr[0].toString(16).toUpperCase());
+
+      var iac = c40Decode(hdr.slice(2,4), 3).replace(/0+$/, '');
+      var ref = c40Decode(hdr.slice(4,10), 9);
+      var authorityId   = ref.slice(0,4).trim();
+      var certificateId = ref.slice(4,8).trim().replace(/0+$/, '');
+      var manifestId    = b2h(hdr[10])+b2h(hdr[11])+b2h(hdr[12]);
+      var timestamp     = ((hdr[13]<<24)|(hdr[14]<<16)|(hdr[15]<<8)|hdr[16])>>>0;
+      var payloadLen    = (hdr[17]<<8)|hdr[18];
+
+      var header = { iac: iac, authorityId: authorityId, certificateId: certificateId,
+                     manifestId: manifestId.toUpperCase(), timestamp: timestamp, payloadLength: payloadLen };
+
+      // PAYLOAD
+      var payloadBytes = bytes.slice(19, 19 + payloadLen);
+      var sigBytes     = bytes.slice(19 + payloadLen, 19 + payloadLen + 64);
+
+      if (sigBytes.length !== 64) throw new Error('Signature incomplète : '+sigBytes.length+' octets (attendu 64)');
+
+      // Décoder le payload MessagePack (1 fixarray racine)
+      var root = msgDecode(payloadBytes, 0);
+      if (root.type !== 'array') throw new Error('PAYLOAD : type inattendu (attendu fixarray)');
+
+      // Mapper avec le Manifest 000500
+      var mapped = mapArray(root.val, MANIFEST.fields);
+
+      // Vérification signature async
+      verifySignature(hdr, payloadBytes, sigBytes)
+        .then(function(ok) {
+          resultDiv.innerHTML = renderResult(rawString, hdr, header, payloadBytes, sigBytes, mapped, ok, '');
+          showResult();
+        })
+        .catch(function(e) {
+          resultDiv.innerHTML = renderResult(rawString, hdr, header, payloadBytes, sigBytes, mapped, false, e.message);
+          showResult();
+        });
+
+    } catch(e) {
+      resultDiv.innerHTML = '<div class="card"><span class="badge err">❌ '+esc(e.message)+'</span></div>';
+      showResult();
     }
+  }
 
-    // 3. Boucle de scan
-    function scan() {
-        if (video.readyState === video.HAVE_ENOUGH_DATA) {
-            canvas.canvas.width = video.videoWidth;
-            canvas.canvas.height = video.videoHeight;
-            canvas.drawImage(video, 0, 0);
-            const imgData = canvas.getImageData(0, 0, canvas.canvas.width, canvas.canvas.height);
-            const code = jsQR(imgData.data, imgData.width, imgData.height);
-            
-            if (code) {
-                document.getElementById('status').innerText = "CODE: " + code.data;
-                document.getElementById('status').style.color = "#0f0";
-                if (navigator.vibrate) navigator.vibrate(100);
-            }
+  function showResult() {
+    resultDiv.classList.remove('hidden');
+    btnReset.style.display = 'inline-flex';
+    btnCamera.style.display = 'none';
+    btnStop.style.display = 'none';
+    resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  document.getElementById('btnManual').addEventListener('click', function() {
+    var val = document.getElementById('manualInput').value.trim();
+    if (val) { handleDetected(val); }
+    else { alert('Collez une chaîne 2D-DOC dans le champ texte.'); }
+  });
+
+  // ── Photo native ────────────────────────────────────────────────
+  document.getElementById('btnPhoto').addEventListener('click', function() {
+    document.getElementById('photoInput').click();
+  });
+  document.getElementById('photoInput').addEventListener('change', function() {
+    var f = this.files && this.files[0];
+    if (f) { processImageFile(f); this.value = ''; }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // CAMÉRA — takePhoto() automatique en boucle
+  // ═══════════════════════════════════════════════════════════════
+  var imageCapture = null;
+  var photoTimer   = null;
+  var PHOTO_INTERVAL_MS = 2000;
+
+  btnCamera.addEventListener('click', startCamera);
+
+  function startCamera() {
+    if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
+
+    // Énumérer les caméras et choisir "camera 0, facing back"
+    navigator.mediaDevices.enumerateDevices()
+      .then(function(devices) {
+        var cameras = devices.filter(function(d) { return d.kind === 'videoinput'; });
+
+        // Chercher "camera 0" ou "facing back" dans le label
+        var target = null;
+        for (var i = 0; i < cameras.length; i++) {
+          var lbl = cameras[i].label.toLowerCase();
+          if (lbl.indexOf('camera 0') >= 0 || lbl === 'facing back') {
+            target = cameras[i]; break;
+          }
         }
-        requestAnimationFrame(scan);
+        // Fallback : première caméra arrière trouvée
+        if (!target) {
+          for (var j = 0; j < cameras.length; j++) {
+            var l = cameras[j].label.toLowerCase();
+            if (l.indexOf('back') >= 0 || l.indexOf('rear') >= 0 || l.indexOf('environment') >= 0) {
+              target = cameras[j]; break;
+            }
+          }
+        }
+        // Dernier recours : première caméra de la liste
+        if (!target && cameras.length > 0) target = cameras[0];
+
+        if (!target) { alert('Aucune caméra trouvée.'); return; }
+
+        scanStatus.textContent = '📷 ' + target.label;
+
+        return navigator.mediaDevices.getUserMedia({
+          video: {
+            deviceId: { exact: target.deviceId },
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        });
+      })
+      .then(function(s) {
+        if (!s) return;
+        stream = s; video.srcObject = s; video.play();
+        scanning = true;
+        btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
+
+        var track = s.getVideoTracks()[0];
+
+        // Afficher les infos du capteur sélectionné
+        if (track) {
+          var settings = track.getSettings ? track.getSettings() : {};
+          scanStatus.textContent = '✅ ' + track.label.slice(0, 35)
+            + ' · ' + (settings.width||'?') + 'x' + (settings.height||'?');
+
+          // Focus continu après 1.5s (flux stabilisé)
+          setTimeout(function() {
+            var caps = track.getCapabilities ? track.getCapabilities() : {};
+            var c = {};
+            if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0)
+              c.focusMode = 'continuous';
+            if (caps.exposureMode && caps.exposureMode.indexOf('continuous') >= 0)
+              c.exposureMode = 'continuous';
+            if (caps.whiteBalanceMode && caps.whiteBalanceMode.indexOf('continuous') >= 0)
+              c.whiteBalanceMode = 'continuous';
+            if (Object.keys(c).length) {
+              track.applyConstraints({ advanced: [c] })
+                .then(function() {
+                  var s2 = track.getSettings ? track.getSettings() : {};
+                  scanStatus.textContent += ' · AF:' + (s2.focusMode||'?');
+                })
+                .catch(function(){});
+            }
+          }, 1500);
+
+          if ('ImageCapture' in window) {
+            try { imageCapture = new ImageCapture(track); } catch(e) { imageCapture = null; }
+          }
+        }
+
+        video.addEventListener('loadedmetadata', function onMeta() {
+          video.removeEventListener('loadedmetadata', onMeta);
+          photoTimer = setTimeout(photoTick, 2500);
+        });
+      })
+      .catch(function(err) { alert('Erreur caméra : ' + err.message); });
+  }
+
+  function photoTick() {
+    if (!scanning) return;
+
+    if (imageCapture) {
+      // ── takePhoto() : pipeline photo complet avec autofocus ──────
+      scanStatus.textContent = '⏳ Capture en cours...';
+      imageCapture.takePhoto({ imageHeight: 1080, imageWidth: 1920 })
+        .then(function(blob) {
+          if (!scanning) return;
+          scanStatus.textContent = '🔍 Décodage photo...';
+          processImageBlob(blob, function(decoded) {
+            if (decoded) {
+              handleDetected(decoded);
+            } else {
+              scanStatus.textContent = '📷 Rien — nouvelle tentative dans 2s';
+              photoTimer = setTimeout(photoTick, PHOTO_INTERVAL_MS);
+            }
+          });
+        })
+        .catch(function(e) {
+          // takePhoto échoué — fallback jsQR live
+          scanStatus.textContent = '⚠ takePhoto échoué, mode jsQR';
+          imageCapture = null;
+          rafId = requestAnimationFrame(scanFrame);
+        });
+    } else {
+      // ── Fallback : jsQR sur frame vidéo live ─────────────────────
+      rafId = requestAnimationFrame(scanFrame);
     }
+  }
 
-    cameraSelect.onchange = () => startStream(cameraSelect.value);
+  // Décode un Blob image via jsQR (avec redimensionnement)
+  function processImageBlob(blob, cb) {
+    var url = URL.createObjectURL(blob);
+    var img = new Image();
+    img.onload = function() {
+      URL.revokeObjectURL(url);
+      var targets = [1280, 800, 2000, img.width];
+      var tried = 0;
+      function tryNext() {
+        if (tried >= targets.length) { cb(null); return; }
+        var targetW = targets[tried++];
+        var scale = Math.min(1, targetW / img.width);
+        var w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        var c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        var imageData = c.getContext('2d').getImageData(0, 0, w, h);
+        if (typeof jsQR === 'undefined') { setTimeout(function(){ doTry(imageData, tryNext); }, 200); }
+        else { doTry(imageData, tryNext); }
+      }
+      function doTry(imageData, onFail) {
+        var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+        if (code) { cb(code.data); } else { onFail(); }
+      }
+      tryNext();
+    };
+    img.onerror = function() { URL.revokeObjectURL(url); cb(null); };
+    img.src = url;
+  }
 
-    getCameras();
-    requestAnimationFrame(scan);
+  // Fallback jsQR sur frame vidéo live (si takePhoto indisponible)
+  function scanFrame() {
+    if (!scanning) return;
+    if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
+      var vw = video.videoWidth, vh = video.videoHeight;
+      var z = currentZoom;
+      var cropW = Math.floor(vw / z), cropH = Math.floor(vh / z);
+      var cropX = Math.floor((vw - cropW) / 2), cropY = Math.floor((vh - cropH) / 2);
+      scanCanvas.width = vw; scanCanvas.height = vh;
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, vw, vh);
+      if (typeof jsQR !== 'undefined') {
+        var code = jsQR(ctx.getImageData(0, 0, vw, vh).data, vw, vh, { inversionAttempts: 'attemptBoth' });
+        if (code) { handleDetected(code.data); return; }
+      }
+    }
+    rafId = requestAnimationFrame(scanFrame);
+  }
+
+  function stopCamera() {
+    scanning = false;
+    if (photoTimer) { clearTimeout(photoTimer); photoTimer = null; }
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    if (stream) { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+    video.srcObject = null;
+    imageCapture = null;
+  }
+
+  btnStop.addEventListener('click', function() {
+    stopCamera();
+    btnCamera.style.display = 'inline-flex'; btnStop.style.display = 'none';
+  });
+
+  btnReset.addEventListener('click', function() {
+    resultDiv.classList.add('hidden'); resultDiv.innerHTML = '';
+    btnReset.style.display = 'none';
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // UPLOAD / DROP
+  // ═══════════════════════════════════════════════════════════════
+  dropZone.addEventListener('click', function() { fileInput.click(); });
+  dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('drag-over'); });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault(); dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files[0]) processImageFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', function() {
+    if (fileInput.files[0]) processImageFile(fileInput.files[0]);
+  });
+
+  function processImageFile(file) {
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function() {
+      URL.revokeObjectURL(url);
+      // Essayer plusieurs résolutions — jsQR préfère ~1000-1500px
+      // Les photos Samsung 12MP (4000x3000) sont trop grandes pour jsQR
+      var targets = [1280, 800, 2000, img.width]; // ordre du plus probable au plus grand
+      var tried = 0;
+      function tryNext() {
+        if (tried >= targets.length) {
+          alert('Aucun QR Code détecté dans l\'image.');
+          return;
+        }
+        var targetW = targets[tried++];
+        var scale = Math.min(1, targetW / img.width);
+        var w = Math.round(img.width * scale);
+        var h = Math.round(img.height * scale);
+        var c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        var cx = c.getContext('2d');
+        cx.drawImage(img, 0, 0, w, h);
+        var imageData = cx.getImageData(0, 0, w, h);
+        if (typeof jsQR === 'undefined') { setTimeout(function(){ doTry(imageData, tryNext); }, 300); }
+        else { doTry(imageData, tryNext); }
+      }
+      function doTry(imageData, onFail) {
+        var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+        if (code) { handleDetected(code.data); }
+        else { onFail(); }
+      }
+      tryNext();
+    };
+    img.src = url;
+  }
+
+})();
 </script>
 </body>
 </html>

@@ -187,51 +187,71 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.8</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.9</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
     <h2>Source</h2>
 
-    <div id="cameraSection">
-      <div class="scan-area" id="scanArea">
-        <video id="video" playsinline autoplay muted></video>
-        <canvas id="scanCanvas"></canvas>
-        <div class="scan-overlay"><div class="scan-frame"></div></div>
-        <div class="scan-status" id="scanStatus">Pointez vers un QR Code 2D-DOC</div>
-      </div>
-      <div class="zoom-bar">
-        <label>🔍 Zoom</label>
-        <input type="range" id="zoomRange" min="1" max="4" step="0.1" value="1.5">
-        <span class="zoom-val" id="zoomVal">×1.5</span>
+    <!-- ── PHOTO NATIVE — méthode principale sur mobile ── -->
+    <div style="margin-bottom:1rem;">
+      <button class="btn primary" id="btnPhoto" style="width:100%;padding:12px;font-size:15px;">
+        📷 Prendre une photo
+      </button>
+      <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
+      <div style="font-size:12px;color:#888;margin-top:0.4rem;text-align:center;">
+        Ouvre l'appareil photo natif · visez, attendez la mise au point, déclenchez
       </div>
     </div>
 
-    <div id="dropZone" style="margin-top:1rem;">
+    <div id="cameraSection">
+      <details style="margin-bottom:0.5rem;">
+        <summary style="font-size:13px;color:#888;cursor:pointer;user-select:none;">
+          📹 Caméra live (secondaire)
+        </summary>
+        <div style="margin-top:0.75rem;">
+          <div class="scan-area" id="scanArea">
+            <video id="video" playsinline autoplay muted></video>
+            <canvas id="scanCanvas"></canvas>
+            <div class="scan-overlay"><div class="scan-frame"></div></div>
+            <div class="scan-status" id="scanStatus">Pointez vers un QR Code 2D-DOC</div>
+          </div>
+          <div class="zoom-bar">
+            <label>🔍 Zoom</label>
+            <input type="range" id="zoomRange" min="1" max="4" step="0.1" value="1.5">
+            <span class="zoom-val" id="zoomVal">×1.5</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" id="btnCamera">Activer la caméra</button>
+            <button class="btn" id="btnStop" style="display:none">Arrêter</button>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div id="dropZone" style="margin-top:0.5rem;">
       <div>Déposez une image QR Code ici</div>
       <div style="font-size:12px;margin-top:4px;">ou cliquez pour choisir un fichier</div>
       <input type="file" id="fileInput" accept="image/*">
     </div>
 
-<div style="margin-top:1rem;">
-  <div style="font-size:13px; color:#888; margin-bottom:0.4em;">
-    Ou coller directement la chaîne 2D-DOC
-  </div>
-  <textarea id="manualInput" rows="3"
-    style="width:100%; font-family:monospace; font-size:11px;
-           padding:0.5em; border:1px solid rgba(0,0,0,0.2);
-           border-radius:6px; resize:vertical; background:#fafaf8;"
-    placeholder="KFRMI6..."></textarea>
-  <button class="btn primary" id="btnManual"
-    style="margin-top:0.5em; width:100%;">
-    Décoder
-  </button>
-</div>
+    <div style="margin-top:1rem;">
+      <div style="font-size:13px; color:#888; margin-bottom:0.4em;">
+        Ou coller directement la chaîne 2D-DOC
+      </div>
+      <textarea id="manualInput" rows="3"
+        style="width:100%; font-family:monospace; font-size:11px;
+               padding:0.5em; border:1px solid rgba(0,0,0,0.2);
+               border-radius:6px; resize:vertical; background:#fafaf8;"
+        placeholder="KFRMI6..."></textarea>
+      <button class="btn primary" id="btnManual"
+        style="margin-top:0.5em; width:100%;">
+        Décoder
+      </button>
+    </div>
 
     <div class="btn-row">
-      <button class="btn primary" id="btnCamera">Activer la caméra</button>
-      <button class="btn" id="btnStop" style="display:none">Arrêter</button>
-      <button class="btn" id="btnReset" style="display:none">Nouveau scan</button>
+      <button class="btn" id="btnReset" style="display:none">🔄 Nouveau scan</button>
     </div>
   </div>
 
@@ -685,15 +705,24 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
     resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
-
-document.getElementById('btnManual').addEventListener('click', function() {
+  document.getElementById('btnManual').addEventListener('click', function() {
     var val = document.getElementById('manualInput').value.trim();
-    if (val) {
-        handleDetected(val);
-    } else {
-        alert('Collez une chaîne 2D-DOC dans le champ texte.');
+    if (val) { handleDetected(val); }
+    else { alert('Collez une chaîne 2D-DOC dans le champ texte.'); }
+  });
+
+  // ── Photo native — méthode principale mobile ────────────────────
+  var btnPhoto  = document.getElementById('btnPhoto');
+  var photoInput = document.getElementById('photoInput');
+
+  btnPhoto.addEventListener('click', function() { photoInput.click(); });
+  photoInput.addEventListener('change', function() {
+    if (photoInput.files && photoInput.files[0]) {
+      processImageFile(photoInput.files[0]);
+      photoInput.value = ''; // reset pour pouvoir reprendre une photo
     }
-});
+  });
+
   // ═══════════════════════════════════════════════════════════════
   // CAMÉRA
   // ═══════════════════════════════════════════════════════════════
@@ -854,7 +883,7 @@ document.getElementById('btnManual').addEventListener('click', function() {
 
   btnReset.addEventListener('click', function() {
     resultDiv.classList.add('hidden'); resultDiv.innerHTML = '';
-    btnReset.style.display = 'none'; btnCamera.style.display = 'inline-flex';
+    btnReset.style.display = 'none';
   });
 
   // ═══════════════════════════════════════════════════════════════

@@ -674,7 +674,13 @@ document.getElementById('btnManual').addEventListener('click', function() {
 
   function startCamera() {
     if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width:  { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      })
       .then(function(s) {
         stream = s; video.srcObject = s; video.play();
         scanning = true;
@@ -685,14 +691,28 @@ document.getElementById('btnManual').addEventListener('click', function() {
       .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });
   }
 
+  var _scanFrameCount = 0;
   function scanFrame() {
     if (!scanning) return;
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      scanCanvas.width = video.videoWidth; scanCanvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0);
-      var imageData = ctx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
-      if (typeof jsQR !== 'undefined') {
-        var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+      var vw = video.videoWidth, vh = video.videoHeight;
+      if (_scanFrameCount === 0 && vw > 0) {
+        scanStatus.textContent = 'Camera ' + vw + 'x' + vh + ' - Pointez vers un QR Code';
+      }
+      _scanFrameCount++;
+      if (typeof jsQR !== 'undefined' && vw > 0) {
+        // 1) Frame complet
+        scanCanvas.width = vw; scanCanvas.height = vh;
+        ctx.drawImage(video, 0, 0);
+        var code = jsQR(ctx.getImageData(0,0,vw,vh).data, vw, vh, { inversionAttempts: 'attemptBoth' });
+        // 2) Si echec, crop zone centrale 60%
+        if (!code) {
+          var cw = Math.floor(vw*0.6), ch = Math.floor(vh*0.6);
+          var cx2 = Math.floor((vw-cw)/2), cy2 = Math.floor((vh-ch)/2);
+          scanCanvas.width = cw; scanCanvas.height = ch;
+          ctx.drawImage(video, cx2, cy2, cw, ch, 0, 0, cw, ch);
+          code = jsQR(ctx.getImageData(0,0,cw,ch).data, cw, ch, { inversionAttempts: 'attemptBoth' });
+        }
         if (code) { handleDetected(code.data); return; }
       }
     }

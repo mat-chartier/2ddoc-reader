@@ -180,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.2</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -227,10 +227,13 @@
 </div>
 
 <script>
-// On charge jsQR depuis jsdelivr — fonctionne dans tous les navigateurs
-var jsQRScript = document.createElement('script');
-jsQRScript.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
-document.head.appendChild(jsQRScript);
+// ZXing-js — bien plus robuste que jsQR sur les QR codes denses
+var zxingScript = document.createElement('script');
+zxingScript.src = 'https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.4/umd/index.min.js';
+document.head.appendChild(zxingScript);
+var zxingLibScript = document.createElement('script');
+zxingLibScript.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.19.2/umd/index.min.js';
+document.head.appendChild(zxingLibScript);
 
 (function() {
 
@@ -672,48 +675,65 @@ document.getElementById('btnManual').addEventListener('click', function() {
   // ═══════════════════════════════════════════════════════════════
   btnCamera.addEventListener('click', startCamera);
 
+  function getZXingMultiReader() {
+    var ZXingLib = window.ZXingLibrary || window.ZXing;
+    if (!ZXingLib || !ZXingLib.MultiFormatReader) return null;
+    var hints = new Map();
+    hints.set(ZXingLib.DecodeHintType.TRY_HARDER, true);
+    hints.set(ZXingLib.DecodeHintType.POSSIBLE_FORMATS, [ZXingLib.BarcodeFormat.QR_CODE]);
+    var r = new ZXingLib.MultiFormatReader();
+    r.setHints(hints);
+    return { reader: r, lib: ZXingLib };
+  }
+
+  function decodeImageDataZXing(imageData, w, h) {
+    var z = getZXingMultiReader();
+    if (!z) return null;
+    try {
+      var lum = new z.lib.RGBLuminanceSource(imageData.data, w, h);
+      var bmp = new z.lib.BinaryBitmap(new z.lib.HybridBinarizer(lum));
+      var result = z.reader.decode(bmp);
+      return result ? result.getText() : null;
+    } catch(e) { return null; }
+  }
+
   function startCamera() {
     if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
     navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width:  { ideal: 1280 },
-          height: { ideal: 720 }
-        }
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
       })
       .then(function(s) {
         stream = s; video.srcObject = s; video.play();
         scanning = true;
         btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
-        scanStatus.textContent = 'Recherche de QR Code...';
+        scanStatus.textContent = 'Initialisation...';
+        video.addEventListener('loadedmetadata', function onMeta() {
+          video.removeEventListener('loadedmetadata', onMeta);
+          scanStatus.textContent = 'Caméra ' + video.videoWidth + 'x' + video.videoHeight + ' — Pointez vers un QR Code';
+        });
         requestAnimationFrame(scanFrame);
       })
       .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });
   }
 
-  var _scanFrameCount = 0;
   function scanFrame() {
     if (!scanning) return;
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
       var vw = video.videoWidth, vh = video.videoHeight;
-      if (_scanFrameCount === 0 && vw > 0) {
-        scanStatus.textContent = 'Camera ' + vw + 'x' + vh + ' - Pointez vers un QR Code';
-      }
-      _scanFrameCount++;
-      if (typeof jsQR !== 'undefined' && vw > 0) {
-        // 1) Frame complet
+      if (vw > 0) {
         scanCanvas.width = vw; scanCanvas.height = vh;
         ctx.drawImage(video, 0, 0);
-        var code = jsQR(ctx.getImageData(0,0,vw,vh).data, vw, vh, { inversionAttempts: 'attemptBoth' });
-        // 2) Si echec, crop zone centrale 60%
-        if (!code) {
-          var cw = Math.floor(vw*0.6), ch = Math.floor(vh*0.6);
-          var cx2 = Math.floor((vw-cw)/2), cy2 = Math.floor((vh-ch)/2);
-          scanCanvas.width = cw; scanCanvas.height = ch;
-          ctx.drawImage(video, cx2, cy2, cw, ch, 0, 0, cw, ch);
-          code = jsQR(ctx.getImageData(0,0,cw,ch).data, cw, ch, { inversionAttempts: 'attemptBoth' });
+
+        // Essai ZXing (TRY_HARDER) sur frame complet
+        var decoded = decodeImageDataZXing(ctx.getImageData(0,0,vw,vh), vw, vh);
+
+        // Fallback jsQR si ZXing pas encore chargé
+        if (!decoded && typeof jsQR !== 'undefined') {
+          var c = jsQR(ctx.getImageData(0,0,vw,vh).data, vw, vh, { inversionAttempts: 'attemptBoth' });
+          if (c) decoded = c.data;
         }
-        if (code) { handleDetected(code.data); return; }
+
+        if (decoded) { handleDetected(decoded); return; }
       }
     }
     rafId = requestAnimationFrame(scanFrame);
@@ -769,10 +789,15 @@ document.getElementById('btnManual').addEventListener('click', function() {
   }
 
   function tryDecode(imageData) {
-    if (typeof jsQR === 'undefined') { alert('jsQR pas encore chargé, réessayez.'); return; }
-    var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-    if (code) { handleDetected(code.data); }
-    else { alert('Aucun QR Code détecté dans l\'image.'); }
+    // Essai ZXing en priorité
+    var decoded = decodeImageDataZXing(imageData, imageData.width, imageData.height);
+    if (decoded) { handleDetected(decoded); return; }
+    // Fallback jsQR
+    if (typeof jsQR !== 'undefined') {
+      var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+      if (code) { handleDetected(code.data); return; }
+    }
+    alert('Aucun QR Code détecté dans l\'image.');
   }
 
 })();

@@ -180,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.1</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.2</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -788,25 +788,36 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
     var url = URL.createObjectURL(file);
     var img = new Image();
     img.onload = function() {
-      var c = document.createElement('canvas');
-      c.width = img.width; c.height = img.height;
-      var cx = c.getContext('2d'); cx.drawImage(img, 0, 0);
-      var imageData = cx.getImageData(0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
-      if (typeof jsQR === 'undefined') {
-        setTimeout(function() { tryDecode(imageData); }, 600);
-      } else {
-        tryDecode(imageData);
+      // Essayer plusieurs résolutions — jsQR préfère ~1000-1500px
+      // Les photos Samsung 12MP (4000x3000) sont trop grandes pour jsQR
+      var targets = [1280, 800, 2000, img.width]; // ordre du plus probable au plus grand
+      var tried = 0;
+      function tryNext() {
+        if (tried >= targets.length) {
+          alert('Aucun QR Code détecté dans l\'image.');
+          return;
+        }
+        var targetW = targets[tried++];
+        var scale = Math.min(1, targetW / img.width);
+        var w = Math.round(img.width * scale);
+        var h = Math.round(img.height * scale);
+        var c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        var cx = c.getContext('2d');
+        cx.drawImage(img, 0, 0, w, h);
+        var imageData = cx.getImageData(0, 0, w, h);
+        if (typeof jsQR === 'undefined') { setTimeout(function(){ doTry(imageData, tryNext); }, 300); }
+        else { doTry(imageData, tryNext); }
       }
+      function doTry(imageData, onFail) {
+        var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+        if (code) { handleDetected(code.data); }
+        else { onFail(); }
+      }
+      tryNext();
     };
     img.src = url;
-  }
-
-  function tryDecode(imageData) {
-    if (typeof jsQR === 'undefined') { alert('jsQR pas encore chargé, réessayez.'); return; }
-    var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-    if (code) { handleDetected(code.data); }
-    else { alert('Aucun QR Code détecté dans l\'image.'); }
   }
 
 })();

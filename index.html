@@ -187,7 +187,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.5</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.6</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -719,7 +719,15 @@ document.getElementById('btnManual').addEventListener('click', function() {
   // ── Caméra ──────────────────────────────────────────────────────
   var barcodeDetector = null;
   var scanTimer = null;
-  var SCAN_INTERVAL_MS = 500;
+  var videoTrack = null;
+  var SCAN_INTERVAL_MS = 150; // rapide entre les steps
+
+  // Focus sweep — distances normalisées 0..1 (proche → loin)
+  // Concentrées sur la plage macro (0–0.5) qui couvre 1cm–30cm
+  var FOCUS_STEPS = [0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0];
+  var focusStepIdx = 0;
+  var focusSweepActive = false;
+  var focusStepsReal = []; // plage réelle recalculée depuis getCapabilities
 
   function startCamera() {
     if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
@@ -739,91 +747,128 @@ document.getElementById('btnManual').addEventListener('click', function() {
         stream = s; video.srcObject = s; video.play();
         scanning = true;
         btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
+        scanStatus.textContent = 'Initialisation...';
 
-        var engine = barcodeDetector ? 'BarcodeDetector natif' : 'ZXing';
-        scanStatus.textContent = 'Initialisation ' + engine + '...';
+        videoTrack = s.getVideoTracks()[0];
+        if (videoTrack) {
+          var caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+          var hasManual   = caps.focusMode && caps.focusMode.indexOf('manual') >= 0;
+          var hasFocusDist = caps.focusDistance !== undefined;
 
-        // ── Forcer autofocus continu via applyConstraints ──────────
-        var track = s.getVideoTracks()[0];
-        if (track) {
-          var caps = track.getCapabilities ? track.getCapabilities() : {};
-          var constraints = {};
-          // focusMode: 'continuous' — mise au point continue
-          if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0) {
-            constraints.focusMode = 'continuous';
-          }
-          // exposureMode: 'continuous' — exposition automatique continue
-          if (caps.exposureMode && caps.exposureMode.indexOf('continuous') >= 0) {
-            constraints.exposureMode = 'continuous';
-          }
-          // whiteBalanceMode: 'continuous'
-          if (caps.whiteBalanceMode && caps.whiteBalanceMode.indexOf('continuous') >= 0) {
-            constraints.whiteBalanceMode = 'continuous';
-          }
-          if (Object.keys(constraints).length > 0) {
-            track.applyConstraints({ advanced: [constraints] })
-              .then(function() { scanStatus.textContent += ' · AF✓'; })
-              .catch(function(e) { console.warn('applyConstraints AF:', e); });
+          if (hasManual && hasFocusDist) {
+            // ── Mode sweep : balayage manuel des distances focales ──
+            focusSweepActive = true;
+            focusStepIdx = 0;
+            var fMin = (caps.focusDistance.min !== undefined) ? caps.focusDistance.min : 0;
+            var fMax = (caps.focusDistance.max !== undefined) ? caps.focusDistance.max : 1;
+            // Générer 12 steps concentrés sur le tiers proche (macro)
+            focusStepsReal = [];
+            for (var i = 0; i < 12; i++) {
+              // Distribution non-linéaire : plus de steps dans la zone macro
+              var t = Math.pow(i / 11, 1.8);
+              focusStepsReal.push(fMin + (fMax - fMin) * t);
+            }
+            videoTrack.applyConstraints({ advanced: [{ focusMode: 'manual' }] })
+              .catch(function(){});
+            scanStatus.textContent = '🔍 Sweep manuel · ' + focusStepsReal.length + ' steps';
+          } else {
+            // ── Fallback : continuous AF ──
+            var cAF = {};
+            if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0)
+              cAF.focusMode = 'continuous';
+            if (caps.exposureMode && caps.exposureMode.indexOf('continuous') >= 0)
+              cAF.exposureMode = 'continuous';
+            if (Object.keys(cAF).length)
+              videoTrack.applyConstraints({ advanced: [cAF] }).catch(function(){});
+            scanStatus.textContent = '📷 AF continu';
           }
         }
 
         video.addEventListener('loadedmetadata', function onMeta() {
           video.removeEventListener('loadedmetadata', onMeta);
-          scanStatus.textContent = (barcodeDetector ? '📷 Natif' : '📷 ZXing')
-            + ' · ' + video.videoWidth + 'x' + video.videoHeight
-            + ' — Pointez vers un QR Code';
-          scanTimer = setTimeout(scanTick, 1200); // laisser l'AF s'établir
+          var engine = barcodeDetector ? 'BarcodeDetector' : 'ZXing';
+          var mode   = focusSweepActive ? 'sweep' : 'AF';
+          scanStatus.textContent = engine + ' · ' + mode + ' · ' + video.videoWidth + 'x' + video.videoHeight;
+          scanTimer = setTimeout(scanTick, 1000);
         });
       })
       .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });
   }
 
+  // ── Tick principal : change le focus puis tente le décodage ─────
   function scanTick() {
     if (!scanning) return;
     if (video.readyState < video.HAVE_ENOUGH_DATA || !video.videoWidth) {
-      scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
-      return;
+      scanTimer = setTimeout(scanTick, 200); return;
     }
 
-    if (barcodeDetector) {
-      // ── Voie 1 : BarcodeDetector natif (async, gère l'autofocus) ──
-      barcodeDetector.detect(video)
-        .then(function(codes) {
-          if (!scanning) return;
-          if (codes.length > 0) {
-            handleDetected(codes[0].rawValue);
-          } else {
-            scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
-          }
+    if (focusSweepActive && videoTrack && focusStepsReal.length) {
+      var dist = focusStepsReal[focusStepIdx];
+      focusStepIdx = (focusStepIdx + 1) % focusStepsReal.length;
+      var pct = Math.round((focusStepIdx / focusStepsReal.length) * 100);
+      scanStatus.textContent = '🔍 focus ' + dist.toFixed(2) + ' [' + pct + '%]';
+
+      videoTrack.applyConstraints({ advanced: [{ focusDistance: dist }] })
+        .then(function() {
+          // Attendre 350ms que l'objectif se déplace physiquement
+          setTimeout(function() {
+            if (!scanning) return;
+            tryDecodeCurrentFrame(function(decoded) {
+              if (decoded) { handleDetected(decoded); }
+              else { scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS); }
+            });
+          }, 350);
         })
         .catch(function() {
-          if (scanning) scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
+          tryDecodeCurrentFrame(function(decoded) {
+            if (decoded) { handleDetected(decoded); }
+            else { scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS); }
+          });
         });
+
     } else {
-      // ── Voie 2 : ZXing sur canvas — capture la zone centrale = zoom ──
-      var vw = video.videoWidth, vh = video.videoHeight;
-      var z = currentZoom;
-      // La zone visible après zoom CSS correspond à (1/z) de l'image native
-      var cropW = Math.floor(vw / z), cropH = Math.floor(vh / z);
-      var cropX = Math.floor((vw - cropW) / 2), cropY = Math.floor((vh - cropH) / 2);
-      // On étire le crop à la taille complète → plus de pixels = meilleure détection
-      scanCanvas.width = vw; scanCanvas.height = vh;
-      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, vw, vh);
-      var decoded = decodeImageDataZXing(ctx.getImageData(0, 0, vw, vh), vw, vh);
-      if (decoded) {
-        handleDetected(decoded);
+      // ── Pas de sweep : BarcodeDetector ou ZXing direct ──
+      if (barcodeDetector) {
+        barcodeDetector.detect(video)
+          .then(function(codes) {
+            if (!scanning) return;
+            if (codes.length > 0) { handleDetected(codes[0].rawValue); }
+            else { scanTimer = setTimeout(scanTick, 400); }
+          })
+          .catch(function() { if (scanning) scanTimer = setTimeout(scanTick, 400); });
       } else {
-        scanTimer = setTimeout(scanTick, SCAN_INTERVAL_MS);
+        tryDecodeCurrentFrame(function(decoded) {
+          if (decoded) { handleDetected(decoded); }
+          else { scanTimer = setTimeout(scanTick, 400); }
+        });
       }
+    }
+  }
+
+  function tryDecodeCurrentFrame(cb) {
+    var vw = video.videoWidth, vh = video.videoHeight;
+    var z = currentZoom;
+    var cropW = Math.floor(vw / z), cropH = Math.floor(vh / z);
+    var cropX = Math.floor((vw - cropW) / 2), cropY = Math.floor((vh - cropH) / 2);
+    scanCanvas.width = vw; scanCanvas.height = vh;
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, vw, vh);
+    if (barcodeDetector) {
+      barcodeDetector.detect(scanCanvas)
+        .then(function(codes) { cb(codes.length > 0 ? codes[0].rawValue : null); })
+        .catch(function() { cb(null); });
+    } else {
+      cb(decodeImageDataZXing(ctx.getImageData(0, 0, vw, vh), vw, vh));
     }
   }
 
   function stopCamera() {
     scanning = false;
+    focusSweepActive = false;
     if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
     if (rafId) cancelAnimationFrame(rafId);
     if (stream) { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
     video.srcObject = null;
+    videoTrack = null;
   }
 
   btnStop.addEventListener('click', function() {

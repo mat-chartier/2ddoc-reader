@@ -187,7 +187,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.4</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v1.5</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -719,12 +719,11 @@ document.getElementById('btnManual').addEventListener('click', function() {
   // ── Caméra ──────────────────────────────────────────────────────
   var barcodeDetector = null;
   var scanTimer = null;
-  var SCAN_INTERVAL_MS = 400; // laisser l'autofocus respirer entre chaque essai
+  var SCAN_INTERVAL_MS = 500;
 
   function startCamera() {
     if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
 
-    // Instancier BarcodeDetector si dispo (Chrome Android, Safari 17+)
     if ('BarcodeDetector' in window) {
       try { barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] }); } catch(e) {}
     }
@@ -744,13 +743,36 @@ document.getElementById('btnManual').addEventListener('click', function() {
         var engine = barcodeDetector ? 'BarcodeDetector natif' : 'ZXing';
         scanStatus.textContent = 'Initialisation ' + engine + '...';
 
+        // ── Forcer autofocus continu via applyConstraints ──────────
+        var track = s.getVideoTracks()[0];
+        if (track) {
+          var caps = track.getCapabilities ? track.getCapabilities() : {};
+          var constraints = {};
+          // focusMode: 'continuous' — mise au point continue
+          if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0) {
+            constraints.focusMode = 'continuous';
+          }
+          // exposureMode: 'continuous' — exposition automatique continue
+          if (caps.exposureMode && caps.exposureMode.indexOf('continuous') >= 0) {
+            constraints.exposureMode = 'continuous';
+          }
+          // whiteBalanceMode: 'continuous'
+          if (caps.whiteBalanceMode && caps.whiteBalanceMode.indexOf('continuous') >= 0) {
+            constraints.whiteBalanceMode = 'continuous';
+          }
+          if (Object.keys(constraints).length > 0) {
+            track.applyConstraints({ advanced: [constraints] })
+              .then(function() { scanStatus.textContent += ' · AF✓'; })
+              .catch(function(e) { console.warn('applyConstraints AF:', e); });
+          }
+        }
+
         video.addEventListener('loadedmetadata', function onMeta() {
           video.removeEventListener('loadedmetadata', onMeta);
           scanStatus.textContent = (barcodeDetector ? '📷 Natif' : '📷 ZXing')
             + ' · ' + video.videoWidth + 'x' + video.videoHeight
             + ' — Pointez vers un QR Code';
-          // Laisser 800ms à l'autofocus avant le 1er scan
-          scanTimer = setTimeout(scanTick, 800);
+          scanTimer = setTimeout(scanTick, 1200); // laisser l'AF s'établir
         });
       })
       .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });

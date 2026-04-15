@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/elliptic/6.5.4/elliptic.min.js"></script>
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <title>2D-DOC Reader</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -47,7 +46,7 @@
     position: relative; width: 100%; aspect-ratio: 1;
     background: #000; border-radius: 8px; overflow: hidden;
   }
-  video { width: 100%; height: 100%; object-fit: cover; transform-origin: center center; transition: transform 0.2s; }
+  video { width: 100%; height: 100%; object-fit: cover; }
   canvas#scanCanvas { display: none; }
 
   .scan-overlay {
@@ -66,13 +65,6 @@
     text-align: center; color: #fff; font-size: 13px;
     background: rgba(0,0,0,0.5); padding: 6px;
   }
-  .zoom-bar {
-    display: flex; align-items: center; gap: 10px;
-    margin-top: 0.6rem; padding: 0 2px;
-  }
-  .zoom-bar label { font-size: 13px; color: #888; white-space: nowrap; min-width: 60px; }
-  .zoom-bar input[type=range] { flex: 1; accent-color: #1a1a1a; }
-  .zoom-val { font-size: 13px; color: #1a1a1a; font-weight: 500; min-width: 32px; text-align: right; }
 
   .btn {
     display: inline-flex; align-items: center; gap: 6px;
@@ -188,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.0</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.1</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -205,40 +197,51 @@
       </div>
     </div>
 
-    <!-- ── SCAN LIVE html5-qrcode ── -->
-    <details id="cameraDetails" style="margin-bottom:0.5rem;">
-      <summary style="font-size:13px;color:#888;cursor:pointer;user-select:none;">
-        📹 Caméra live (scan continu)
-      </summary>
-      <div style="margin-top:0.75rem;">
-        <div id="qr-reader" style="width:100%;border-radius:8px;overflow:hidden;"></div>
-        <div class="btn-row" style="margin-top:0.5rem;">
-          <button class="btn primary" id="btnCamera">Activer la caméra</button>
-          <button class="btn" id="btnStop" style="display:none">Arrêter</button>
+    <div id="cameraSection">
+      <details style="margin-bottom:0.5rem;">
+        <summary style="font-size:13px;color:#888;cursor:pointer;user-select:none;">
+          📹 Caméra live (scan continu)
+        </summary>
+        <div style="margin-top:0.75rem;">
+          <div class="scan-area" id="scanArea">
+            <video id="video" playsinline autoplay muted></video>
+            <canvas id="scanCanvas"></canvas>
+            <div class="scan-overlay"><div class="scan-frame"></div></div>
+            <div class="scan-status" id="scanStatus">Pointez vers un QR Code 2D-DOC</div>
+          </div>
+          <div class="zoom-bar">
+            <label>🔍 Zoom</label>
+            <input type="range" id="zoomRange" min="1" max="4" step="0.1" value="1.5">
+            <span class="zoom-val" id="zoomVal">×1.5</span>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" id="btnCamera">Activer la caméra</button>
+            <button class="btn" id="btnStop" style="display:none">Arrêter</button>
+          </div>
         </div>
-      </div>
-    </details>
+      </details>
+    </div>
 
-    <div id="dropZone" style="margin-top:0.5rem;">
+    <div id="dropZone" style="margin-top:1rem;">
       <div>Déposez une image QR Code ici</div>
       <div style="font-size:12px;margin-top:4px;">ou cliquez pour choisir un fichier</div>
       <input type="file" id="fileInput" accept="image/*">
     </div>
 
-    <div style="margin-top:1rem;">
-      <div style="font-size:13px; color:#888; margin-bottom:0.4em;">
-        Ou coller directement la chaîne 2D-DOC
-      </div>
-      <textarea id="manualInput" rows="3"
-        style="width:100%; font-family:monospace; font-size:11px;
-               padding:0.5em; border:1px solid rgba(0,0,0,0.2);
-               border-radius:6px; resize:vertical; background:#fafaf8;"
-        placeholder="KFRMI6..."></textarea>
-      <button class="btn primary" id="btnManual"
-        style="margin-top:0.5em; width:100%;">
-        Décoder
-      </button>
-    </div>
+<div style="margin-top:1rem;">
+  <div style="font-size:13px; color:#888; margin-bottom:0.4em;">
+    Ou coller directement la chaîne 2D-DOC
+  </div>
+  <textarea id="manualInput" rows="3"
+    style="width:100%; font-family:monospace; font-size:11px;
+           padding:0.5em; border:1px solid rgba(0,0,0,0.2);
+           border-radius:6px; resize:vertical; background:#fafaf8;"
+    placeholder="KFRMI6..."></textarea>
+  <button class="btn primary" id="btnManual"
+    style="margin-top:0.5em; width:100%;">
+    Décoder
+  </button>
+</div>
 
     <div class="btn-row">
       <button class="btn" id="btnReset" style="display:none">🔄 Nouveau scan</button>
@@ -249,6 +252,11 @@
 </div>
 
 <script>
+// On charge jsQR depuis jsdelivr — fonctionne dans tous les navigateurs
+var jsQRScript = document.createElement('script');
+jsQRScript.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+document.head.appendChild(jsQRScript);
+
 (function() {
 
   // ═══════════════════════════════════════════════════════════════
@@ -304,12 +312,31 @@
   // ═══════════════════════════════════════════════════════════════
   // DOM
   // ═══════════════════════════════════════════════════════════════
+  var video      = document.getElementById('video');
+  var scanCanvas = document.getElementById('scanCanvas');
+  var scanStatus = document.getElementById('scanStatus');
   var btnCamera  = document.getElementById('btnCamera');
   var btnStop    = document.getElementById('btnStop');
   var btnReset   = document.getElementById('btnReset');
   var dropZone   = document.getElementById('dropZone');
   var fileInput  = document.getElementById('fileInput');
   var resultDiv  = document.getElementById('result');
+  var zoomRange  = document.getElementById('zoomRange');
+  var zoomVal    = document.getElementById('zoomVal');
+
+  var stream   = null;
+  var scanning = false;
+  var rafId    = null;
+  var ctx      = scanCanvas.getContext('2d');
+  var currentZoom = 1.5;
+
+  function applyZoom(z) {
+    currentZoom = z;
+    video.style.transform = 'scale(' + z + ')';
+    zoomVal.textContent = '×' + z.toFixed(1);
+  }
+  applyZoom(1.5);
+  zoomRange.addEventListener('input', function() { applyZoom(parseFloat(zoomRange.value)); });
 
   // ═══════════════════════════════════════════════════════════════
   // BASE45
@@ -662,6 +689,8 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
   function showResult() {
     resultDiv.classList.remove('hidden');
     btnReset.style.display = 'inline-flex';
+    btnCamera.style.display = 'none';
+    btnStop.style.display = 'none';
     resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -671,58 +700,69 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
     else { alert('Collez une chaîne 2D-DOC dans le champ texte.'); }
   });
 
+  // ── Photo native ────────────────────────────────────────────────
+  document.getElementById('btnPhoto').addEventListener('click', function() {
+    document.getElementById('photoInput').click();
+  });
+  document.getElementById('photoInput').addEventListener('change', function() {
+    var f = this.files && this.files[0];
+    if (f) { processImageFile(f); this.value = ''; }
+  });
+
   // ═══════════════════════════════════════════════════════════════
-  // PHOTO NATIVE
+  // CAMÉRA
   // ═══════════════════════════════════════════════════════════════
-  var btnPhoto   = document.getElementById('btnPhoto');
-  var photoInput = document.getElementById('photoInput');
-  btnPhoto.addEventListener('click', function() { photoInput.click(); });
-  photoInput.addEventListener('change', function() {
-    if (photoInput.files && photoInput.files[0]) {
-      processImageFile(photoInput.files[0]);
-      photoInput.value = '';
+  btnCamera.addEventListener('click', startCamera);
+
+  function startCamera() {
+    if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
+    navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 }, height: { ideal: 720 },
+        focusMode: 'continuous', exposureMode: 'continuous'
+      }
+    })
+      .then(function(s) {
+        stream = s; video.srcObject = s; video.play();
+        scanning = true;
+        btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
+        video.addEventListener('loadedmetadata', function onMeta() {
+          video.removeEventListener('loadedmetadata', onMeta);
+          scanStatus.textContent = video.videoWidth + 'x' + video.videoHeight + ' — Pointez vers un QR Code';
+        });
+        requestAnimationFrame(scanFrame);
+      })
+      .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });
+  }
+
+  function scanFrame() {
+    if (!scanning) return;
+    if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
+      var vw = video.videoWidth, vh = video.videoHeight;
+      var z = currentZoom;
+      var cropW = Math.floor(vw / z), cropH = Math.floor(vh / z);
+      var cropX = Math.floor((vw - cropW) / 2), cropY = Math.floor((vh - cropH) / 2);
+      scanCanvas.width = vw; scanCanvas.height = vh;
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, vw, vh);
+      if (typeof jsQR !== 'undefined') {
+        var code = jsQR(ctx.getImageData(0, 0, vw, vh).data, vw, vh, { inversionAttempts: 'attemptBoth' });
+        if (code) { handleDetected(code.data); return; }
+      }
     }
-  });
+    rafId = requestAnimationFrame(scanFrame);
+  }
 
-  // ═══════════════════════════════════════════════════════════════
-  // CAMÉRA LIVE — html5-qrcode
-  // ═══════════════════════════════════════════════════════════════
-  var html5Qr = null;
-
-  btnCamera.addEventListener('click', function() {
-    if (!window.Html5Qrcode) { alert('html5-qrcode pas encore chargé, réessayez.'); return; }
-    // Ouvrir le <details> pour montrer le scanner
-    document.getElementById('cameraDetails').open = true;
-    btnCamera.style.display = 'none';
-    btnStop.style.display = 'inline-flex';
-
-    html5Qr = new Html5Qrcode('qr-reader');
-    html5Qr.start(
-      { facingMode: 'environment' },
-      {
-        fps: 10,
-        qrbox: { width: 250, height: 250 },
-        aspectRatio: 1.0
-      },
-      function(decodedText) {
-        // Succès
-        html5Qr.stop().catch(function(){});
-        btnCamera.style.display = 'inline-flex';
-        btnStop.style.display = 'none';
-        handleDetected(decodedText);
-      },
-      function() { /* erreur silencieuse — pas de QR dans ce frame */ }
-    ).catch(function(err) {
-      alert('Impossible d\'accéder à la caméra : ' + err);
-      btnCamera.style.display = 'inline-flex';
-      btnStop.style.display = 'none';
-    });
-  });
+  function stopCamera() {
+    scanning = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (stream) { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+    video.srcObject = null;
+  }
 
   btnStop.addEventListener('click', function() {
-    if (html5Qr) { html5Qr.stop().catch(function(){}); html5Qr = null; }
-    btnCamera.style.display = 'inline-flex';
-    btnStop.style.display = 'none';
+    stopCamera();
+    btnCamera.style.display = 'inline-flex'; btnStop.style.display = 'none';
   });
 
   btnReset.addEventListener('click', function() {
@@ -731,7 +771,7 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // UPLOAD / DROP — html5-qrcode gère aussi les fichiers image
+  // UPLOAD / DROP
   // ═══════════════════════════════════════════════════════════════
   dropZone.addEventListener('click', function() { fileInput.click(); });
   dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
@@ -745,24 +785,28 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
   });
 
   function processImageFile(file) {
-    if (!window.Html5Qrcode) { alert('html5-qrcode pas encore chargé, réessayez.'); return; }
-    var tempQr = new Html5Qrcode('qr-reader-file-temp');
-    // Créer un div temporaire invisible pour html5-qrcode
-    var tempDiv = document.getElementById('qr-reader-file-temp');
-    if (!tempDiv) {
-      tempDiv = document.createElement('div');
-      tempDiv.id = 'qr-reader-file-temp';
-      tempDiv.style.display = 'none';
-      document.body.appendChild(tempDiv);
-    }
-    tempQr = new Html5Qrcode('qr-reader-file-temp');
-    tempQr.scanFile(file, true)
-      .then(function(decodedText) {
-        handleDetected(decodedText);
-      })
-      .catch(function() {
-        alert('Aucun QR Code détecté dans l\'image.');
-      });
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function() {
+      var c = document.createElement('canvas');
+      c.width = img.width; c.height = img.height;
+      var cx = c.getContext('2d'); cx.drawImage(img, 0, 0);
+      var imageData = cx.getImageData(0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      if (typeof jsQR === 'undefined') {
+        setTimeout(function() { tryDecode(imageData); }, 600);
+      } else {
+        tryDecode(imageData);
+      }
+    };
+    img.src = url;
+  }
+
+  function tryDecode(imageData) {
+    if (typeof jsQR === 'undefined') { alert('jsQR pas encore chargé, réessayez.'); return; }
+    var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+    if (code) { handleDetected(code.data); }
+    else { alert('Aucun QR Code détecté dans l\'image.'); }
   }
 
 })();

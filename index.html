@@ -3,268 +3,180 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Scanner QR - A54 Pro Focus</title>
+    <title>Scanner QR Pro - A54 Optimization</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
-        body {
-            font-family: sans-serif;
-            margin: 0;
-            padding: 0;
-            overflow: hidden; /* Empêche le scroll */
-            background-color: #000;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            color: white;
-        }
+        :root { --accent: #00ff00; }
+        body { font-family: sans-serif; margin: 0; background: #000; color: white; height: 100vh; overflow: hidden; }
+        
+        #app { position: relative; width: 100%; height: 100%; display: flex; justify-content: center; }
+        video { position: absolute; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
 
-        #app {
-            position: relative;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
+        /* Overlay Interface */
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; 
+                   display: flex; flex-direction: column; align-items: center; justify-content: center;
+                   background: rgba(0,0,0,0.2); }
 
-        /* Le flux vidéo brut */
-        #video {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            object-fit: cover; /* Remplit l'écran sans déformer */
-            z-index: 1;
-        }
+        /* Zone de visée */
+        #scanner-box { width: 220px; height: 220px; border: 2px solid #fff; border-radius: 15px;
+                       box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5); position: relative; }
+        
+        #scanner-box::after { content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 3px;
+                               background: var(--accent); box-shadow: 0 0 15px var(--accent);
+                               animation: scan 2.5s ease-in-out infinite; }
+        @keyframes scan { 0%, 100% { top: 5%; } 50% { top: 95%; } }
 
-        /* Overlay : Guide visuel pour l'utilisateur */
-        #overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 2;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            background: rgba(0,0,0,0.3); /* Légère teinte sombre */
-        }
+        /* Contrôles de Zoom */
+        #controls { position: absolute; bottom: 120px; z-index: 5; width: 80%; max-width: 300px;
+                    background: rgba(0,0,0,0.7); padding: 15px; border-radius: 50px; 
+                    display: flex; align-items: center; gap: 10px; }
+        input[type=range] { flex: 1; accent-color: var(--accent); }
 
-        /* Le carré de visée (Scanner Box) */
-        /* Astuce UX : Il est volontairement petit pour forcer l'utilisateur à reculer,
-           limitant les problèmes de mise au point minimale du A54. */
-        #scanner-box {
-            width: 200px; /* Petit sur l'écran */
-            height: 200px;
-            border: 2px solid #fff;
-            border-radius: 12px;
-            box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5); /* Assombrit le reste de l'écran */
-            position: relative;
-        }
+        #info { position: absolute; top: 50px; background: rgba(0,0,0,0.7); padding: 8px 15px; 
+                border-radius: 20px; font-size: 0.9em; z-index: 5; }
 
-        /* La ligne de scan animée */
-        #scanner-box::after {
-            content: "";
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 2px;
-            background: #00ff00;
-            box-shadow: 0 0 10px #00ff00;
-            animation: scanning 2s linear infinite;
-        }
-
-        @keyframes scanning {
-            0% { top: 0; }
-            50% { top: 100%; }
-            100% { top: 0; }
-        }
-
-        #instructions {
-            margin-top: 20px;
-            text-align: center;
-            font-size: 14px;
-            padding: 10px 20px;
-            background: rgba(0,0,0,0.6);
-            border-radius: 8px;
-        }
-
-        /* Zone de résultat */
-        #result-popup {
-            position: fixed;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #fff;
-            color: #333;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            z-index: 10;
-            max-width: 80%;
-            word-wrap: break-word;
-            display: none;
-        }
-
-        #result-popup.visible {
-            display: block;
-        }
-
-        button#btn-close {
-            background: #333;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 6px;
-            margin-top: 10px;
-            cursor: pointer;
-        }
+        /* Result Popup */
+        #result-popup { position: fixed; bottom: 40px; background: white; color: #000;
+                        padding: 20px; border-radius: 15px; width: 80%; display: none; z-index: 10;
+                        text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        #result-popup.show { display: block; animation: slideUp 0.3s ease-out; }
+        @keyframes slideUp { from { transform: translateY(100px); } to { transform: translateY(0); } }
+        button { background: #000; color: #fff; border: none; padding: 10px 20px; border-radius: 5px; margin-top: 10px; }
     </style>
 </head>
 <body>
 
-    <div id="app">
-        <video id="video" autoplay playsinline></video>
+<div id="app">
+    <div id="info">Distance conseillée : 20-30 cm</div>
+    <video id="video" autoplay playsinline></video>
+    
+    <div id="overlay">
+        <div id="scanner-box"></div>
+    </div>
 
-        <div id="overlay">
-            <div id="scanner-box"></div>
-            <p id="instructions">Cadrez le QR Code.<br>Ne collez pas l'appareil (gardez ~15cm).</p>
-        </div>
+    <div id="controls">
+        <span>🔍</span>
+        <input type="range" id="zoom-range" min="1" max="1" step="0.1" value="1">
+        <span id="zoom-val">1x</span>
     </div>
 
     <div id="result-popup">
-        <strong>Code détecté :</strong>
-        <p id="result-text"></p>
-        <button id="btn-close">Scanner à nouveau</button>
+        <div style="font-size: 0.8em; color: #666;">Contenu détecté :</div>
+        <div id="result-text" style="font-weight: bold; margin: 10px 0; word-break: break-all;"></div>
+        <button onclick="resetScan()">Scanner à nouveau</button>
     </div>
+</div>
 
-    <canvas id="hidden-canvas" style="display:none;"></canvas>
+<canvas id="canvas" style="display:none;"></canvas>
 
-    <script>
-        const video = document.getElementById('video');
-        const canvasElement = document.getElementById('hidden-canvas');
-        const canvas = canvasElement.getContext('2d', { willReadFrequently: true });
-        const resultPopup = document.getElementById('result-popup');
-        const resultText = document.getElementById('result-text');
-        const btnClose = document.getElementById('btn-close');
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas').getContext('2d', { willReadFrequently: true });
+    const zoomRange = document.getElementById('zoom-range');
+    const zoomVal = document.getElementById('zoom-val');
+    const resultPopup = document.getElementById('result-popup');
+    const resultText = document.getElementById('result-text');
 
-        let videoStream = null;
-        let isScanning = true;
+    let currentTrack = null;
+    let isScanning = true;
 
-        // --- STRATÉGIE OPTIMISÉE POUR LE SAMSUNG A54 ---
-        // 1. facingMode "environment"
-        // 2. Résolution idéale 1080p pour forcer l'usage du capteur principal (qui a l'autofocus),
-        //    et éviter le capteur grand-angle (focus fixe).
-        const constraints = {
-            video: {
-                facingMode: { exact: "environment" },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 }
-            }
-        };
-
-        // Fonction pour démarrer la caméra
-        async function startCamera() {
-            try {
-                // Demande d'autorisation et accès au flux
-                videoStream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = videoStream;
-                
-                // --- STRATÉGIE FOCUS POUR A54 ---
-                // Le navigateur a besoin d'un délai après le début du flux
-                // pour stabiliser l'image et appliquer les contraintes matérielles avancées.
-                setTimeout(() => {
-                    applyAdvancedFocus(videoStream);
-                }, 1000); // 1 seconde est souvent nécessaire pour le matériel Samsung
-
-                requestAnimationFrame(tick);
-            } catch (err) {
-                console.error("Erreur caméra :", err);
-                alert("Impossible d'accéder à la caméra arrière sécurisée (HTTPS requis).");
-            }
-        }
-
-        // Tente d'appliquer l'autofocus continu de manière forcée
-        async function applyAdvancedFocus(stream) {
-            const track = stream.getVideoTracks()[0];
-            const capabilities = track.getCapabilities();
-            
-            // Vérifie si le A54 supporte le focusMode
-            if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
-                try {
-                    await track.applyConstraints({
-                        advanced: [{
-                            focusMode: 'continuous' // Force la mise au point dynamique
-                        }]
-                    });
-                    console.log("✅ Autofocus continu appliqué avec succès.");
-                } catch (e) {
-                    console.warn("Échec de l'application de l'autofocus continu :", e);
+    async function initCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { exact: "environment" },
+                    width: { ideal: 1920 }, // Force le capteur principal haute résolution
+                    height: { ideal: 1080 }
                 }
-            } else {
-                console.log("❌ L'autofocus continu n'est pas supporté par ce capteur (peut-être pas le principal ?).");
-            }
-        }
-
-        // La boucle principale de traitement de l'image (frame par frame)
-        function tick() {
-            if (isScanning && video.readyState === video.HAVE_ENOUGH_DATA) {
-                // On ajuste le canvas à la taille de la vidéo
-                canvasElement.height = video.videoHeight;
-                canvasElement.width = video.videoWidth;
-
-                // On dessine la frame vidéo courante sur le canvas caché
-                canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
-
-                // On extrait les données de pixels brutes
-                const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
-
-                // jsQR scanne ces données à la recherche d'un code
-                const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                    inversionAttempts: "dontInvert", // Gagne en rapidité
-                });
-
-                if (code) {
-                    // Code trouvé !
-                    handleSuccess(code.data);
-                }
-            }
-            // On continue la boucle si on scanne toujours
-            if (isScanning) {
-                requestAnimationFrame(tick);
-            }
-        }
-
-        function handleSuccess(data) {
-            isScanning = false; // Arrête la boucle jsQR
+            });
             
-            // Affiche le résultat
-            resultText.textContent = data;
-            resultPopup.classList.add('visible');
+            video.srcObject = stream;
+            currentTrack = stream.getVideoTracks()[0];
 
-            // Feedback Haptique (vibre) - souvent supporté sur Chrome/Brave Android
-            if (navigator.vibrate) {
-                navigator.vibrate(200);
-            }
+            // Attendre que la caméra réponde pour configurer le hardware
+            video.onloadedmetadata = () => {
+                setTimeout(setupHardware, 1000);
+                requestAnimationFrame(tick);
+            };
+        } catch (err) {
+            alert("Erreur : " + err.message + "\nVérifiez que vous êtes en HTTPS.");
+        }
+    }
 
-            console.log("QR Code détecté :", data);
+    async function setupHardware() {
+        if (!currentTrack) return;
+        const caps = currentTrack.getCapabilities();
+        
+        const constraints = { advanced: [] };
+
+        // 1. Force Autofocus Continu
+        if (caps.focusMode?.includes('continuous')) {
+            constraints.advanced.push({ focusMode: 'continuous' });
         }
 
-        // Reset du scanneur
-        btnClose.addEventListener('click', () => {
-            resultPopup.classList.remove('visible');
-            resultText.textContent = "";
-            isScanning = true;
-            requestAnimationFrame(tick); // Redémarre la boucle
-        });
+        // 2. Setup du Zoom
+        if (caps.zoom) {
+            zoomRange.min = caps.zoom.min;
+            zoomRange.max = caps.zoom.max;
+            
+            // On pré-zoome à 2.5x par défaut (idéal pour QR 3cm sur A54)
+            const defaultZoom = Math.min(2.5, caps.zoom.max);
+            zoomRange.value = defaultZoom;
+            zoomVal.innerText = defaultZoom + "x";
+            constraints.advanced.push({ zoom: defaultZoom });
+        }
 
-        // Démarrage au chargement de la page
-        window.addEventListener('load', startCamera);
+        try {
+            await currentTrack.applyConstraints(constraints);
+        } catch (e) { console.error("Hardware setup failed", e); }
+    }
 
-    </script>
+    // Mise à jour manuelle du zoom via le curseur
+    zoomRange.oninput = async (e) => {
+        const val = parseFloat(e.target.value);
+        zoomVal.innerText = val.toFixed(1) + "x";
+        if (currentTrack) {
+            await currentTrack.applyConstraints({ advanced: [{ zoom: val }] });
+        }
+    };
+
+    function tick() {
+        if (isScanning && video.readyState === video.HAVE_ENOUGH_DATA) {
+            const vW = video.videoWidth;
+            const vH = video.videoHeight;
+            canvas.canvas.width = vW;
+            canvas.canvas.height = vH;
+            
+            // On dessine la frame
+            canvas.drawImage(video, 0, 0, vW, vH);
+            
+            const imageData = canvas.getImageData(0, 0, vW, vH);
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: "dontInvert",
+            });
+
+            if (code && code.data !== "") {
+                onDetected(code.data);
+            }
+        }
+        if (isScanning) requestAnimationFrame(tick);
+    }
+
+    function onDetected(data) {
+        isScanning = false;
+        if (navigator.vibrate) navigator.vibrate(150);
+        
+        resultText.innerText = data;
+        resultPopup.classList.add('show');
+    }
+
+    function resetScan() {
+        resultPopup.classList.remove('show');
+        isScanning = true;
+        requestAnimationFrame(tick);
+    }
+
+    window.onload = initCamera;
+</script>
 </body>
 </html>

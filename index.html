@@ -180,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.2</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.3</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -710,8 +710,12 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // CAMÉRA
+  // CAMÉRA — takePhoto() automatique en boucle
   // ═══════════════════════════════════════════════════════════════
+  var imageCapture = null;
+  var photoTimer   = null;
+  var PHOTO_INTERVAL_MS = 2000; // prendre une photo toutes les 2s
+
   btnCamera.addEventListener('click', startCamera);
 
   function startCamera() {
@@ -719,23 +723,92 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
     navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 }, height: { ideal: 720 },
-        focusMode: 'continuous', exposureMode: 'continuous'
+        width: { ideal: 1920 }, height: { ideal: 1080 }
       }
     })
-      .then(function(s) {
-        stream = s; video.srcObject = s; video.play();
-        scanning = true;
-        btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
-        video.addEventListener('loadedmetadata', function onMeta() {
-          video.removeEventListener('loadedmetadata', onMeta);
-          scanStatus.textContent = video.videoWidth + 'x' + video.videoHeight + ' — Pointez vers un QR Code';
-        });
-        requestAnimationFrame(scanFrame);
-      })
-      .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });
+    .then(function(s) {
+      stream = s; video.srcObject = s; video.play();
+      scanning = true;
+      btnCamera.style.display = 'none'; btnStop.style.display = 'inline-flex';
+
+      var track = s.getVideoTracks()[0];
+      if (track && ('ImageCapture' in window)) {
+        try { imageCapture = new ImageCapture(track); } catch(e) { imageCapture = null; }
+      }
+
+      video.addEventListener('loadedmetadata', function onMeta() {
+        video.removeEventListener('loadedmetadata', onMeta);
+        var mode = imageCapture ? '📷 takePhoto' : '🎞 jsQR live';
+        scanStatus.textContent = mode + ' · ' + video.videoWidth + 'x' + video.videoHeight + ' — Pointez vers un QR Code';
+        // Laisser 1.5s à l'autofocus avant la première tentative
+        photoTimer = setTimeout(photoTick, 1500);
+      });
+    })
+    .catch(function(err) { alert('Impossible d\'accéder à la caméra : ' + err.message); });
   }
 
+  function photoTick() {
+    if (!scanning) return;
+
+    if (imageCapture) {
+      // ── takePhoto() : pipeline photo complet avec autofocus ──────
+      scanStatus.textContent = '⏳ Capture en cours...';
+      imageCapture.takePhoto({ imageHeight: 1080, imageWidth: 1920 })
+        .then(function(blob) {
+          if (!scanning) return;
+          scanStatus.textContent = '🔍 Décodage photo...';
+          processImageBlob(blob, function(decoded) {
+            if (decoded) {
+              handleDetected(decoded);
+            } else {
+              scanStatus.textContent = '📷 Rien — nouvelle tentative dans 2s';
+              photoTimer = setTimeout(photoTick, PHOTO_INTERVAL_MS);
+            }
+          });
+        })
+        .catch(function(e) {
+          // takePhoto échoué — fallback jsQR live
+          scanStatus.textContent = '⚠ takePhoto échoué, mode jsQR';
+          imageCapture = null;
+          rafId = requestAnimationFrame(scanFrame);
+        });
+    } else {
+      // ── Fallback : jsQR sur frame vidéo live ─────────────────────
+      rafId = requestAnimationFrame(scanFrame);
+    }
+  }
+
+  // Décode un Blob image via jsQR (avec redimensionnement)
+  function processImageBlob(blob, cb) {
+    var url = URL.createObjectURL(blob);
+    var img = new Image();
+    img.onload = function() {
+      URL.revokeObjectURL(url);
+      var targets = [1280, 800, 2000, img.width];
+      var tried = 0;
+      function tryNext() {
+        if (tried >= targets.length) { cb(null); return; }
+        var targetW = targets[tried++];
+        var scale = Math.min(1, targetW / img.width);
+        var w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        var c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        var imageData = c.getContext('2d').getImageData(0, 0, w, h);
+        if (typeof jsQR === 'undefined') { setTimeout(function(){ doTry(imageData, tryNext); }, 200); }
+        else { doTry(imageData, tryNext); }
+      }
+      function doTry(imageData, onFail) {
+        var code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+        if (code) { cb(code.data); } else { onFail(); }
+      }
+      tryNext();
+    };
+    img.onerror = function() { URL.revokeObjectURL(url); cb(null); };
+    img.src = url;
+  }
+
+  // Fallback jsQR sur frame vidéo live (si takePhoto indisponible)
   function scanFrame() {
     if (!scanning) return;
     if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
@@ -755,9 +828,11 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
 
   function stopCamera() {
     scanning = false;
-    if (rafId) cancelAnimationFrame(rafId);
+    if (photoTimer) { clearTimeout(photoTimer); photoTimer = null; }
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     if (stream) { stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
     video.srcObject = null;
+    imageCapture = null;
   }
 
   btnStop.addEventListener('click', function() {

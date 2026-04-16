@@ -180,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.7</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.8</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -715,44 +715,44 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
   function startCamera() {
     if (!navigator.mediaDevices) { alert('Caméra non disponible.'); return; }
 
-    // Énumérer les caméras et choisir "camera 0, facing back"
-    navigator.mediaDevices.enumerateDevices()
-      .then(function(devices) {
-        var cameras = devices.filter(function(d) { return d.kind === 'videoinput'; });
+    // S'assurer que le stream précédent est bien libéré avant d'en ouvrir un nouveau
+    stopCamera();
 
-        // Chercher "camera 0" ou "facing back" dans le label
-        var target = null;
-        for (var i = 0; i < cameras.length; i++) {
-          var lbl = cameras[i].label.toLowerCase();
-          if (lbl.indexOf('camera 0') >= 0 || lbl === 'facing back') {
-            target = cameras[i]; break;
-          }
-        }
-        // Fallback : première caméra arrière trouvée
-        if (!target) {
-          for (var j = 0; j < cameras.length; j++) {
-            var l = cameras[j].label.toLowerCase();
-            if (l.indexOf('back') >= 0 || l.indexOf('rear') >= 0 || l.indexOf('environment') >= 0) {
-              target = cameras[j]; break;
+    // Petit délai pour laisser le driver libérer le capteur
+    setTimeout(function() {
+      navigator.mediaDevices.enumerateDevices()
+        .then(function(devices) {
+          var cameras = devices.filter(function(d) { return d.kind === 'videoinput'; });
+
+          var target = null;
+          for (var i = 0; i < cameras.length; i++) {
+            var lbl = cameras[i].label.toLowerCase();
+            if (lbl.indexOf('camera 0') >= 0 || lbl === 'facing back') {
+              target = cameras[i]; break;
             }
           }
-        }
-        // Dernier recours : première caméra de la liste
-        if (!target && cameras.length > 0) target = cameras[0];
-
-        if (!target) { alert('Aucune caméra trouvée.'); return; }
-
-        scanStatus.textContent = '📷 ' + target.label;
-
-        return navigator.mediaDevices.getUserMedia({
-          video: {
-            deviceId: { exact: target.deviceId },
-            width:  { ideal: 1920 },
-            height: { ideal: 1080 }
+          if (!target) {
+            for (var j = 0; j < cameras.length; j++) {
+              var l = cameras[j].label.toLowerCase();
+              if (l.indexOf('back') >= 0 || l.indexOf('rear') >= 0 || l.indexOf('environment') >= 0) {
+                target = cameras[j]; break;
+              }
+            }
           }
-        });
-      })
-      .then(function(s) {
+          if (!target && cameras.length > 0) target = cameras[0];
+          if (!target) { alert('Aucune caméra trouvée.'); return; }
+
+          scanStatus.textContent = '📷 ' + target.label;
+
+          return navigator.mediaDevices.getUserMedia({
+            video: {
+              deviceId: { exact: target.deviceId },
+              width:  { ideal: 1920 },
+              height: { ideal: 1080 }
+            }
+          });
+        })
+        .then(function(s) {
         if (!s) return;
         stream = s; video.srcObject = s; video.play();
         scanning = true;
@@ -795,8 +795,12 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
             rafId = requestAnimationFrame(scanFrame);
           }, 2500);
         });
-      })
-      .catch(function(err) { alert('Erreur caméra : ' + err.message); });
+        })
+        .catch(function(err) {
+          scanStatus.textContent = '❌ ' + (err.name || '') + ' : ' + (err.message || 'erreur inconnue');
+          btnCamera.style.display = 'inline-flex'; btnStop.style.display = 'none';
+        });
+    }, 300); // délai pour libérer le driver
   }
 
   function scanFrame() {

@@ -180,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.8</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.9</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
 
   <div class="card" id="inputCard">
@@ -746,7 +746,8 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
 
           return navigator.mediaDevices.getUserMedia({
             video: {
-              deviceId: { exact: target.deviceId },
+              deviceId: { ideal: target.deviceId }, // ideal au lieu de exact — plus tolérant
+              facingMode: { ideal: 'environment' },
               width:  { ideal: 1920 },
               height: { ideal: 1080 }
             }

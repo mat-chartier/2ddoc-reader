@@ -180,8 +180,8 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">v3.1 · chaîne en ligne</span></h1>
-  <div class="subtitle">Décodeur 2D-DOC V2 (ISO 22376) · manifest &amp; certificat récupérés en ligne sur la prod ou qualif ANTS</div>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">v3.2 · chaîne en ligne</span></h1>
+  <div class="subtitle">Décodeur 2D-DOC V2 (ISO 22376) · manifest &amp; certificat récupérés en ligne sur la prod et qualif ANTS</div>
 
   <div class="card" id="inputCard">
     <h2>Source</h2>
@@ -582,6 +582,18 @@ document.head.appendChild(jsQRScript);
     return { val: arr, next: cur, type: 'array' };
   }
 
+  // Décode TOUTES les valeurs de tête d'un payload (flux MessagePack).
+  function decodePayloadValues(buf) {
+    var vals = [], off = 0, guard = 0;
+    while (off < buf.length && guard++ < 100000) {
+      var v = msgDecode(buf, off);
+      vals.push(v);
+      if (!v.next || v.next <= off) break;   // garde-fou anti-boucle
+      off = v.next;
+    }
+    return vals;
+  }
+
   function utf8d(buf, offset, len) {
     try { return new TextDecoder('utf-8').decode(buf.slice(offset, offset+len)); }
     catch(e) { var s=''; for(var i=0;i<len;i++) s+=String.fromCharCode(buf[offset+i]); return s; }
@@ -834,9 +846,11 @@ document.head.appendChild(jsQRScript);
 
       if (sigBytes.length !== 64) throw new Error('Signature incomplète : '+sigBytes.length+' octets (attendu 64)');
 
-      // Décoder le payload MessagePack (1 fixarray racine)
-      var root = msgDecode(payloadBytes, 0);
-      if (root.type !== 'array') throw new Error('PAYLOAD : type inattendu (attendu fixarray)');
+      // Décoder le payload : flux MessagePack (1 valeur par champ, forme JDD/ANTS)
+      // OU tableau unique enveloppant (forme produite par certaines libs). On décode
+      // ici le flux brut ; le déballage éventuel se fait une fois le manifest connu.
+      var payloadVals = decodePayloadValues(payloadBytes);
+      if (!payloadVals.length) throw new Error('PAYLOAD vide ou illisible');
 
       // Chemin de chaîne déduit du PREFIX + id manifest (hex) pour les URLs
       var chainPath     = chainPathFromPrefix(prefix || 'KFRMI6');
@@ -854,7 +868,12 @@ document.head.appendChild(jsQRScript);
       ]).then(function(res) {
         MANIFEST = res[0];                       // schéma → moteur de rendu
         var cert = res[1];
-        var mapped  = mapArray(root.val, MANIFEST.fields);
+        // Cadrage : tableau enveloppant si une seule valeur tableau dont la taille
+        // = nb de champs du manifest ; sinon flux de valeurs (référence ANTS/JDD).
+        var fieldVals = (payloadVals.length === 1 && payloadVals[0].type === 'array'
+                         && payloadVals[0].val.length === MANIFEST.fields.length)
+                        ? payloadVals[0].val : payloadVals;
+        var mapped  = mapArray(fieldVals, MANIFEST.fields);
         var sources = { chainPath: chainPath, manifestUrl: MANIFEST.url, certUrl: cert.url,
                         manifestEnv: MANIFEST.env, certEnv: cert.env, base: cert.base };
         return verifySignature(hdr, payloadBytes, sigBytes, cert.point).then(function(ok) {

@@ -180,8 +180,8 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">VERSION DÉMO v2.9</span></h1>
-  <div class="subtitle">Décodeur 2D-DOC V2 · Manifest 000500 · Attestation de droits</div>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">v3.0 · chaîne en ligne</span></h1>
+  <div class="subtitle">Décodeur 2D-DOC V2 (ISO 22376) · manifest &amp; certificat récupérés en ligne sur la qualif ANTS</div>
 
   <div class="card" id="inputCard">
     <h2>Source</h2>
@@ -256,54 +256,190 @@ document.head.appendChild(jsQRScript);
 (function() {
 
   // ═══════════════════════════════════════════════════════════════
-  // CLÉ PUBLIQUE — embarquée pour la démo
-  // En production : récupérée depuis la TSL ANTS via chaîne de confiance
+  // CHAÎNE DE CONFIANCE ANTS (qualif) — récupération EN LIGNE
+  // Le manifest ET le certificat ne sont plus embarqués : ils sont
+  // téléchargés à la volée sur pub.ants.gouv.fr selon le HEADER.
   // ═══════════════════════════════════════════════════════════════
-  var PUBLIC_KEY_PEM = [
-    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnrqXlcwBG+pXd0Pu7QEVTvfxqQJN',
-    'LZSXSqLcTh9tRnBPY7y+reGMxD96ELe3/FqcjIFMGquLCfgmw4HLgGU0uA=='
-  ].join('');
+  var ANTS_BASE = 'https://pub.ants.gouv.fr/2D-DOC/V2/QLF';
 
-  // ═══════════════════════════════════════════════════════════════
-  // MANIFEST 000500 — embarqué depuis pub.ants.gouv.fr
-  // https://pub.ants.gouv.fr/2D-DOC/V2/QLF/04_MANIFESTS/KFR/MI/6_ISO22376/000500.xml
-  // ═══════════════════════════════════════════════════════════════
-  var MANIFEST = {
-    id: '000500',
-    name: 'Assurance Maladie et Complémentaire Santé',
-    description: 'Attestation de droits',
-    fields: [
-      { name: 'Validité',        type: 'OBJECT',       nillable: false, objectType: 'validityTypeDefinition' },
-      { name: 'NIR Assuré',      type: 'STRING',       nillable: false },
-      { name: 'Médecin TT',      type: 'BOOLEAN',      nillable: true  },
-      { name: 'C2S',             type: 'OBJECT',       nillable: true,  objectType: 'C2STypeDefinition' },
-      { name: 'Message Famille', type: 'STRING',       nillable: true,  dict: 'MessageFamilleDictionnary' },
-      { name: 'Bénéficiaire',    type: 'OBJECT_ARRAY', nillable: false, objectType: 'BénéficiaireTypeDefinition' },
-      { name: 'Avertissement',   type: 'STRING',       nillable: false },
-    ],
-    types: {
-      validityTypeDefinition: [
-        { name: 'Date de début', type: 'DATE' },
-        { name: 'Date de fin',   type: 'DATE' },
-      ],
-      C2STypeDefinition: [
-        { name: 'Date de début', type: 'DATE' },
-        { name: 'Date de fin',   type: 'DATE' },
-      ],
-      BénéficiaireTypeDefinition: [
-        { name: 'Nom',                  type: 'STRING' },
-        { name: 'Prénoms',              type: 'STRING' },
-        { name: 'NIR',                  type: 'STRING' },
-        { name: 'Date de naissance',    type: 'STRING' },
-        { name: 'Rang',                 type: 'STRING' },
-        { name: 'Message Bénéficiaire', type: 'STRING_ARRAY', dict: 'MessageBénéficiaireDictionnary' },
-      ],
-    },
-    dicts: {
-      MessageFamilleDictionnary:       { '1': 'Message 1', '2': 'Message 2', '3': 'Message 3' },
-      MessageBénéficiaireDictionnary:  { '1': 'Message 1', '2': 'Message 2', '3': 'Message 3' },
-    },
+  // Proxy CORS optionnel. pub.ants.gouv.fr n'envoie pas forcément les
+  // en-têtes CORS ; si le fetch direct est bloqué par le navigateur,
+  // renseignez ici un proxy qui préfixe l'URL cible (ex. 'https://proxy/?url=').
+  // Vide = appel direct.
+  var FETCH_PREFIX = 'https://bitter-pine-bd9c.mat-chartier-public.workers.dev?url=';
+
+  // Dossier de format selon le formatCode du PREFIX (6 = ISO 22376:2023)
+  var FORMAT_FOLDER = { '6': '6_ISO22376' };
+
+  // Manifest courant (rempli dynamiquement après téléchargement)
+  var MANIFEST = null;
+
+  // Caches mémoire (évite de re-télécharger lors de scans répétés)
+  var manifestCache = {}, certCache = {};
+
+  // PREFIX "KFRMI6" -> chemin de chaîne "KFR/MI/6_ISO22376"
+  function chainPathFromPrefix(prefix) {
+    var iac = prefix.slice(0, 3), cin = prefix.slice(3, 5), fmt = prefix.slice(5, 6);
+    return iac + '/' + cin + '/' + (FORMAT_FOLDER[fmt] || (fmt + '_UNKNOWN'));
+  }
+
+  function antsFetch(url) {
+    return fetch(FETCH_PREFIX + url, { redirect: 'follow' }).then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' sur ' + url);
+      return r;
+    });
+  }
+
+  // ── Certificat de signature : téléchargement + extraction de la clé EC ──
+  function fetchCertificate(chainPath, authorityId, certificateId) {
+    var url = ANTS_BASE + '/03_CERTIFICATS/' + chainPath + '/' + authorityId + '/' + certificateId + '.cer';
+    if (certCache[url]) return Promise.resolve(certCache[url]);
+    return antsFetch(url).then(function(r) { return r.arrayBuffer(); }).then(function(buf) {
+      var der = new Uint8Array(buf);
+      var point = extractEcPoint(der);
+      if (!point) throw new Error('Clé publique EC P-256 introuvable dans le certificat');
+      var info = { url: url, point: point, der: der };
+      certCache[url] = info;
+      return info;
+    });
+  }
+
+  // Extrait le point EC non compressé (04||X||Y, 65 o) du SubjectPublicKeyInfo
+  // d'un certificat X.509 DER (préfixe SPKI fixe pour prime256v1).
+  function extractEcPoint(der) {
+    var P = [0x30,0x59,0x30,0x13,0x06,0x07,0x2A,0x86,0x48,0xCE,0x3D,0x02,0x01,
+             0x06,0x08,0x2A,0x86,0x48,0xCE,0x3D,0x03,0x01,0x07,0x03,0x42,0x00];
+    for (var i = 0; i + P.length + 65 <= der.length; i++) {
+      var ok = true;
+      for (var j = 0; j < P.length; j++) { if (der[i+j] !== P[j]) { ok = false; break; } }
+      if (ok && der[i+P.length] === 0x04) return der.slice(i+P.length, i+P.length+65);
+    }
+    return null;
+  }
+
+  // ── Manifest : téléchargement XML + parsing en schéma interne ──
+  function fetchManifest(chainPath, manifestId) {
+    var url = ANTS_BASE + '/04_MANIFESTS/' + chainPath + '/' + manifestId + '.xml';
+    if (manifestCache[url]) return Promise.resolve(manifestCache[url]);
+    return antsFetch(url).then(function(r) { return r.text(); }).then(function(xml) {
+      var m = parseManifestXml(xml);
+      m.url = url;
+      manifestCache[url] = m;
+      return m;
+    });
+  }
+
+  // Types XML -> types internes du moteur de rendu
+  var TYPE_MAP = {
+    String: 'STRING', Date: 'DATE', Integer: 'INTEGER', Float: 'FLOAT',
+    Boolean: 'BOOLEAN', Binary: 'BINARY', Timestamp: 'TIMESTAMP', Object: 'OBJECT',
+    StringArray: 'STRING_ARRAY', DateArray: 'DATE_ARRAY', IntegerArray: 'INTEGER_ARRAY',
+    FloatArray: 'FLOAT_ARRAY', BooleanArray: 'BOOLEAN_ARRAY', BinaryArray: 'BINARY_ARRAY',
+    TimestampArray: 'TIMESTAMP_ARRAY', ObjectArray: 'OBJECT_ARRAY'
   };
+
+  function localName(el) { return el.localName || el.nodeName.replace(/^.*:/, ''); }
+
+  function directChild(el, name) {
+    var c = el.children;
+    for (var i = 0; i < c.length; i++) { if (localName(c[i]) === name) return c[i]; }
+    return null;
+  }
+  // <Value> en préférant xml:lang="fr"
+  function localizedValue(container) {
+    if (!container) return '';
+    var all = container.getElementsByTagName('*'), fr = null, any = null;
+    for (var i = 0; i < all.length; i++) {
+      if (localName(all[i]) !== 'Value') continue;
+      any = any || all[i];
+      var lang = all[i].getAttribute('xml:lang') ||
+                 all[i].getAttributeNS('http://www.w3.org/XML/1998/namespace', 'lang') ||
+                 all[i].getAttribute('lang');
+      if (lang === 'fr') { fr = all[i]; break; }
+    }
+    var v = fr || any;
+    return (v ? v.textContent : container.textContent).trim();
+  }
+  // Libellé d'un champ : <Name>/<Label> localisé en priorité, sinon attribut name
+  function fieldLabel(el) {
+    var nm = directChild(el, 'Name') || directChild(el, 'Label');
+    if (nm) { var txt = localizedValue(nm); if (txt) return txt; }
+    return el.getAttribute('name') || el.getAttribute('label') || localName(el);
+  }
+
+  function parseFieldEl(el) {
+    var internal = TYPE_MAP[localName(el)];
+    if (!internal) return null;                       // pas un champ typé
+    var f = { name: fieldLabel(el), type: internal };
+    var t = el.getAttribute('type');
+    if (t) f.objectType = t;                          // Object / ObjectArray -> nom du Type
+    var dic = el.getAttribute('dictionary') || el.getAttribute('dict');
+    var kids = el.getElementsByTagName('*');
+    for (var k = 0; k < kids.length; k++) {
+      var ln = localName(kids[k]);
+      if (!dic && ln === 'Dictionary') dic = kids[k].textContent.trim();
+      if (ln === 'Nillable') f.nillable = true;
+    }
+    if (dic) f.dict = dic;
+    return f;
+  }
+
+  function parseFieldsContainer(container) {
+    var out = [];
+    if (!container) return out;
+    var ch = container.children;
+    for (var i = 0; i < ch.length; i++) { var f = parseFieldEl(ch[i]); if (f) out.push(f); }
+    return out;
+  }
+
+  function firstByLocal(parent, name) {
+    if (!parent) return null;
+    var all = parent.getElementsByTagName('*');
+    for (var i = 0; i < all.length; i++) { if (localName(all[i]) === name) return all[i]; }
+    return null;
+  }
+  function valueText(parent, name) {
+    return localizedValue(firstByLocal(parent, name));
+  }
+
+  function parseManifestXml(xml) {
+    var doc = new DOMParser().parseFromString(xml, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('Manifest XML illisible');
+    var root = doc.documentElement;
+    var m = { id: valueText(root, 'Id'), name: valueText(root, 'Name'),
+              description: valueText(root, 'Description'), fields: [], types: {}, dicts: {} };
+
+    // Payload : <Schema><Payload><Fields>…</Fields>
+    var payload = firstByLocal(root, 'Payload');
+    m.fields = parseFieldsContainer(firstByLocal(payload, 'Fields') || payload);
+
+    // Types : chaque définition nommée -> liste de sous-champs
+    var typesEl = firstByLocal(root, 'Types');
+    if (typesEl) {
+      var tc = typesEl.children;
+      for (var i = 0; i < tc.length; i++) {
+        var nm = tc[i].getAttribute('name'); if (!nm) continue;
+        m.types[nm] = parseFieldsContainer(firstByLocal(tc[i], 'Fields') || tc[i]);
+      }
+    }
+
+    // Dictionnaires (extension) -> { code: label }
+    var dictsEl = firstByLocal(root, 'Dictionaries') || firstByLocal(root, 'DictionariesExtension');
+    if (dictsEl) {
+      var dn = dictsEl.children;
+      for (var d = 0; d < dn.length; d++) {
+        var dname = dn[d].getAttribute('name'); if (!dname) continue;
+        var map = {}, entries = dn[d].children;
+        for (var e = 0; e < entries.length; e++) {
+          var code = entries[e].getAttribute('key') || entries[e].getAttribute('code') || entries[e].getAttribute('value');
+          if (code != null) map[code] = entries[e].textContent.trim();
+        }
+        m.dicts[dname] = map;
+      }
+    }
+    if (!m.name) m.name = 'Manifest ' + m.id;
+    return m;
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // DOM
@@ -436,12 +572,6 @@ document.head.appendChild(jsQRScript);
   // ═══════════════════════════════════════════════════════════════
   // VÉRIFICATION SIGNATURE — Web Crypto API
   // ═══════════════════════════════════════════════════════════════
- function importPubKey() {
-    var der = Uint8Array.from(atob(PUBLIC_KEY_PEM), function(c){ return c.charCodeAt(0); });
-    return crypto.subtle.importKey('spki', der.buffer,
-        { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
-}
-
   function sha256(data) {
     return crypto.subtle.digest('SHA-256', data).then(function(h){ return new Uint8Array(h); });
   }
@@ -461,23 +591,18 @@ document.head.appendChild(jsQRScript);
 
   function cat(a, b) { var c=new Uint8Array(a.length+b.length); c.set(a); c.set(b,a.length); return c; }
 
-function verifySignature(headerBytes, payloadBytes, sigBytes) {
+  // pubPoint = clé publique EC (04||X||Y, 65 o) extraite du certificat ANTS.
+  // Schéma de signature 2D-DOC V2 : ECDSA P-256 sur SHA256(header ‖ SHA256(payload)).
+  function verifySignature(headerBytes, payloadBytes, sigBytes, pubPoint) {
     return sha256(payloadBytes).then(function(hp) {
         var concat = cat(headerBytes, hp);
         return sha256(concat).then(function(hf) {
-            // Utiliser elliptic.js pour NONEwithECDSA
-            var ec  = new elliptic.ec('p256');
-            // Extraire la clé publique depuis le DER SPKI (octets 27 à 91 = 64 octets)
-            var pubDer = Uint8Array.from(atob(PUBLIC_KEY_PEM), function(c){ return c.charCodeAt(0); });
-            var pubKey = ec.keyFromPublic(pubDer.slice(26), 'array');
-
-            // Signature DER → {r, s}
+            var ec = new elliptic.ec('p256');
+            var pubKey = ec.keyFromPublic(Array.from(pubPoint), 'array');
             var r = toHex(sigBytes.slice(0,32)).toLowerCase();
             var s = toHex(sigBytes.slice(32,64)).toLowerCase();
-
-            // Vérifier ECDSA sur hash_final sans rehash
-            var ok = pubKey.verify(Array.from(hf), { r: r, s: s });
-            return ok;
+            // Vérifier ECDSA sur le hash final sans rehash (NONEwithECDSA)
+            return pubKey.verify(Array.from(hf), { r: r, s: s });
         });
     });
 }
@@ -546,7 +671,7 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
     }).join('');
   }
 
-  function renderResult(rawString, headerBytes, header, payloadBytes, sigBytes, mapped, sigOk, sigErr) {
+  function renderResult(rawString, headerBytes, header, payloadBytes, sigBytes, mapped, sigOk, sigErr, sources) {
     var html = '';
 
     // Statut signature
@@ -560,32 +685,31 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
       html += '<span style="font-size:12px;color:#888">'+esc(sigErr||'')+'</span></div></div>';
     }
 
-    // Chaîne de confiance
-    html += '<div class="card-warn">';
-    html += '<h2 style="color:#854f0b">Chaîne de confiance</h2>';
-    html += '<div class="demo-note">⚠ <strong>Version démo — chaîne de confiance non validée dynamiquement.</strong><br>';
-    html += 'La vérification utilise la clé publique embarquée localement (clé de test, en attente de référencement ANTS).<br>';
-    html += 'En production, le lecteur navigue automatiquement dans la chaîne ci-dessous.</div>';
+    // Chaîne de confiance — résolution EN LIGNE sur la qualif ANTS
+    var cp = sources.chainPath;
+    html += '<div class="card">';
+    html += '<h2>Chaîne de confiance · qualif ANTS</h2>';
+    html += '<div class="demo-note" style="background:#eaf3de;border-color:#9bc36a;color:#3b6d11">✓ <strong>Manifest et certificat récupérés en ligne</strong> sur la chaîne de qualification, selon le HEADER. La clé de vérification provient du certificat téléchargé — plus aucune donnée embarquée.</div>';
     html += '<div class="chain-step"><div class="step-num">1</div><div>';
-    html += '<div class="step-title">LOTL Racine France Titres <span class="badge ok" style="font-size:10px">✓ accessible</span></div>';
-    html += '<div class="step-url"><a href="https://pub.ants.gouv.fr/2D-DOC/V2/QLF/00_LOTL_RACINE/lotl_racine_ants_test.xml" target="_blank">https://pub.ants.gouv.fr/2D-DOC/V2/QLF/00_LOTL_RACINE/lotl_racine_ants_test.xml</a></div>';
-    html += '<div class="step-desc">Navigation via Code IAC du PREFIX → KFR</div></div></div>';
+    html += '<div class="step-title">LOTL Racine France Titres</div>';
+    html += '<div class="step-url"><a href="'+ANTS_BASE+'/00_LOTL_RACINE/lotl_racine_ants_test.xml" target="_blank">'+ANTS_BASE+'/00_LOTL_RACINE/lotl_racine_ants_test.xml</a></div>';
+    html += '<div class="step-desc">IAC du PREFIX → '+esc(header.iac)+'</div></div></div>';
     html += '<div class="chain-step"><div class="step-num">2</div><div>';
-    html += '<div class="step-title">LOTL OSC KFR <span class="badge ok" style="font-size:10px">✓ accessible</span></div>';
-    html += '<div class="step-url"><a href="https://pub.ants.gouv.fr/2D-DOC/V2/QLF/01_LOTLs/KFR/lotl_ants_kfr_test.xml" target="_blank">https://pub.ants.gouv.fr/2D-DOC/V2/QLF/01_LOTLs/KFR/lotl_ants_kfr_test.xml</a></div>';
-    html += '<div class="step-desc">Navigation via CIN + Format → MI / 6</div></div></div>';
+    html += '<div class="step-title">LOTL OSC '+esc(header.iac)+'</div>';
+    html += '<div class="step-url"><a href="'+ANTS_BASE+'/01_LOTLs/'+esc(header.iac)+'/lotl_ants_'+esc(header.iac.toLowerCase())+'_test.xml" target="_blank">'+ANTS_BASE+'/01_LOTLs/'+esc(header.iac)+'/lotl_ants_'+esc(header.iac.toLowerCase())+'_test.xml</a></div>';
+    html += '<div class="step-desc">CIN + Format → '+esc(cp)+'</div></div></div>';
     html += '<div class="chain-step"><div class="step-num">3</div><div>';
-    html += '<div class="step-title">TSL KFR / MI / Format 6 (ISO 22376) <span class="badge ok" style="font-size:10px">✓ accessible</span></div>';
-    html += '<div class="step-url"><a href="https://pub.ants.gouv.fr/2D-DOC/V2/QLF/02_TSLs/KFR/MI/6_ISO22376/tsl_ants_kfrmi6_02_test.xml" target="_blank">https://pub.ants.gouv.fr/2D-DOC/V2/QLF/02_TSLs/KFR/MI/6_ISO22376/tsl_ants_kfrmi6_02_test.xml</a></div>';
-    html += '<div class="step-desc">Navigation via authorityId + certificateId du HEADER → '+esc(header.authorityId)+' / '+esc(header.certificateId)+'</div></div></div>';
+    html += '<div class="step-title">TSL '+esc(cp)+'</div>';
+    html += '<div class="step-url"><a href="'+ANTS_BASE+'/02_TSLs/'+esc(cp)+'/tsl_ants_kfrmi6_01_test.xml" target="_blank">'+ANTS_BASE+'/02_TSLs/'+esc(cp)+'/tsl_ants_kfrmi6_01_test.xml</a></div>';
+    html += '<div class="step-desc">authorityId + certificateId du HEADER → '+esc(header.authorityId)+' / '+esc(header.certificateId)+'</div></div></div>';
     html += '<div class="chain-step"><div class="step-num">4</div><div>';
-    html += '<div class="step-title">Certificat émetteur <span class="badge warn" style="font-size:10px">⚠ embarqué (démo)</span></div>';
-    html += '<div class="step-url">Autorité <strong>'+esc(header.authorityId)+'</strong> · Certificat <strong>'+esc(header.certificateId)+'</strong></div>';
-    html += '<div class="step-desc">En production : récupéré depuis la TSL ANTS</div></div></div>';
+    html += '<div class="step-title">Certificat de signature <span class="badge ok" style="font-size:10px">✓ téléchargé</span></div>';
+    html += '<div class="step-url"><a href="'+esc(sources.certUrl)+'" target="_blank">'+esc(sources.certUrl)+'</a></div>';
+    html += '<div class="step-desc">Clé publique EC P-256 extraite du certificat → vérification de la signature</div></div></div>';
     html += '<div class="chain-step"><div class="step-num">5</div><div>';
-    html += '<div class="step-title">Manifest 000500 <span class="badge ok" style="font-size:10px">✓ embarqué</span></div>';
-    html += '<div class="step-url"><a href="https://pub.ants.gouv.fr/2D-DOC/V2/QLF/04_MANIFESTS/KFR/MI/6_ISO22376/000500.xml" target="_blank">https://pub.ants.gouv.fr/2D-DOC/V2/QLF/04_MANIFESTS/KFR/MI/6_ISO22376/000500.xml</a></div>';
-    html += '<div class="step-desc">Schéma du PAYLOAD — noms et types des champs</div></div></div>';
+    html += '<div class="step-title">Manifest '+esc(MANIFEST.id)+' <span class="badge ok" style="font-size:10px">✓ téléchargé</span></div>';
+    html += '<div class="step-url"><a href="'+esc(sources.manifestUrl)+'" target="_blank">'+esc(sources.manifestUrl)+'</a></div>';
+    html += '<div class="step-desc">Schéma du PAYLOAD — champs, types et dictionnaires</div></div></div>';
     html += '</div>';
 
     // HEADER
@@ -622,6 +746,23 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
     return html;
   }
 
+  function renderFetchError(e, header, chainPath) {
+    var msg = (e && e.message) ? e.message : String(e);
+    var corsLikely = (e instanceof TypeError) || /Failed to fetch|NetworkError|CORS|load failed/i.test(msg);
+    var h = '<div class="card-warn"><h2 style="color:#854f0b">Récupération impossible sur la chaîne ANTS</h2>';
+    h += fr('Erreur', esc(msg));
+    h += fr('Autorité / Certificat', esc(header.authorityId) + ' / ' + esc(header.certificateId));
+    h += fr('Manifest', esc(header.manifestId));
+    if (corsLikely) {
+      h += '<div class="demo-note" style="margin-top:0.8em">Cause probable : <strong>CORS</strong>. Le serveur <code>pub.ants.gouv.fr</code> n\'autorise pas forcément les requêtes cross-origin depuis un navigateur.<br>'
+         + 'Pistes : servir ce lecteur derrière un backend qui relaie les appels, ou renseigner un proxy dans la constante <code>FETCH_PREFIX</code> en haut du script.</div>';
+    } else {
+      h += '<div class="demo-note" style="margin-top:0.8em">Vérifiez que le certificat <code>'+esc(header.certificateId)+'.cer</code> et le manifest <code>'+esc(header.manifestId)+'.xml</code> existent bien sous <code>'+esc(chainPath)+'</code> dans l\'environnement de qualif.</div>';
+    }
+    h += '</div>';
+    return h;
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // TRAITEMENT PRINCIPAL
   // ═══════════════════════════════════════════════════════════════
@@ -652,7 +793,7 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
       var header = { iac: iac, authorityId: authorityId, certificateId: certificateId,
                      manifestId: manifestId.toUpperCase(), timestamp: timestamp, payloadLength: payloadLen };
 
-      // PAYLOAD
+      // PAYLOAD + signature
       var payloadBytes = bytes.slice(19, 19 + payloadLen);
       var sigBytes     = bytes.slice(19 + payloadLen, 19 + payloadLen + 64);
 
@@ -662,19 +803,32 @@ function verifySignature(headerBytes, payloadBytes, sigBytes) {
       var root = msgDecode(payloadBytes, 0);
       if (root.type !== 'array') throw new Error('PAYLOAD : type inattendu (attendu fixarray)');
 
-      // Mapper avec le Manifest 000500
-      var mapped = mapArray(root.val, MANIFEST.fields);
+      // Chemin de chaîne déduit du PREFIX + id manifest (hex) pour les URLs
+      var chainPath     = chainPathFromPrefix(prefix || 'KFRMI6');
+      var manifestIdRaw = b2h(hdr[10]) + b2h(hdr[11]) + b2h(hdr[12]);
 
-      // Vérification signature async
-      verifySignature(hdr, payloadBytes, sigBytes)
-        .then(function(ok) {
-          resultDiv.innerHTML = renderResult(rawString, hdr, header, payloadBytes, sigBytes, mapped, ok, '');
-          showResult();
-        })
-        .catch(function(e) {
-          resultDiv.innerHTML = renderResult(rawString, hdr, header, payloadBytes, sigBytes, mapped, false, e.message);
+      // Indicateur de chargement pendant les appels réseau
+      resultDiv.innerHTML = '<div class="card"><span class="badge warn">⏳ Récupération du manifest et du certificat sur la chaîne ANTS…</span>'
+        + '<div style="font-size:12px;color:#888;margin-top:8px">Manifest '+esc(header.manifestId)+' · Autorité '+esc(header.authorityId)+' · Certificat '+esc(header.certificateId)+'</div></div>';
+      showResult();
+
+      // Télécharger en parallèle le manifest (schéma) et le certificat (clé publique)
+      Promise.all([
+        fetchManifest(chainPath, manifestIdRaw),
+        fetchCertificate(chainPath, header.authorityId, header.certificateId)
+      ]).then(function(res) {
+        MANIFEST = res[0];                       // schéma → moteur de rendu
+        var cert = res[1];
+        var mapped  = mapArray(root.val, MANIFEST.fields);
+        var sources = { chainPath: chainPath, manifestUrl: MANIFEST.url, certUrl: cert.url };
+        return verifySignature(hdr, payloadBytes, sigBytes, cert.point).then(function(ok) {
+          resultDiv.innerHTML = renderResult(rawString, hdr, header, payloadBytes, sigBytes, mapped, ok, '', sources);
           showResult();
         });
+      }).catch(function(e) {
+        resultDiv.innerHTML = renderFetchError(e, header, chainPath);
+        showResult();
+      });
 
     } catch(e) {
       resultDiv.innerHTML = '<div class="card"><span class="badge err">❌ '+esc(e.message)+'</span></div>';

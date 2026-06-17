@@ -180,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">v3.2 · chaîne en ligne</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">v3.3 · chaîne en ligne</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 (ISO 22376) · manifest &amp; certificat récupérés en ligne sur la prod et qualif ANTS</div>
 
   <div class="card" id="inputCard">
@@ -711,30 +711,69 @@ document.head.appendChild(jsQRScript);
     }).join('');
   }
 
-  function renderResult(rawString, headerBytes, header, payloadBytes, sigBytes, mapped, sigOk, sigErr, sources) {
+  // Rendu des valeurs brutes du payload quand le manifest est indisponible.
+  function rawValueToString(v) {
+    if (!v || v.type === 'nil' || v.val === null || v.val === undefined) return '— (nil)';
+    if (v.type === 'array') return '[ ' + v.val.map(rawValueToString).join('  ,  ') + ' ]';
+    if (v.type === 'bool')  return v.val ? 'true' : 'false';
+    return String(v.val);
+  }
+  function renderRawValues(vals) {
+    return vals.map(function(v, i) {
+      return fr('Champ ' + (i+1) + '&nbsp;<span class="type-tag">' + esc(v.type) + '</span>',
+                esc(rawValueToString(v)), true);
+    }).join('');
+  }
+
+  function renderResult(rawString, headerBytes, header, payloadBytes, sigBytes, info) {
+    var manifest = info.manifest, mapped = info.mapped, payloadVals = info.payloadVals;
+    var sigState = info.sigState, sources = info.sources;
     var html = '';
 
-    // Statut signature
-    if (sigOk) {
+    // Bandeau de dégradation (manifest et/ou certificat manquant)
+    if (!manifest || sigState === 'unverified') {
+      var msgs = [];
+      if (!manifest)                 msgs.push('Manifest introuvable sur la prod et la qualif → champs affichés en brut, sans libellés ni types.');
+      if (sigState === 'unverified') msgs.push('Certificat introuvable → la signature n\'a PAS pu être vérifiée.');
+      html += '<div class="card-warn"><div style="display:flex;align-items:center;gap:8px;"><span class="badge warn">⚠ Contenu affiché sans validation complète</span></div>';
+      html += '<div class="demo-note" style="margin-top:.6em">'+msgs.map(esc).join('<br>')+'</div>';
+      if (sources.manifestErr) html += fr('Détail manifest', esc(sources.manifestErr));
+      if (sources.certErr)     html += fr('Détail certificat', esc(sources.certErr));
+      html += '</div>';
+    }
+
+    // Statut signature (3 états : valide / invalide / non vérifiée)
+    if (sigState === 'valid') {
       html += '<div class="card"><div style="display:flex;align-items:center;gap:8px;">';
       html += '<span class="badge ok">✅ Signature ECDSA P-256 valide</span>';
       html += '<span style="font-size:12px;color:#888">Double passe SHA-256 — spec §2.5</span></div></div>';
+    } else if (sigState === 'invalid') {
+      html += '<div class="card"><div style="display:flex;align-items:center;gap:8px;">';
+      html += '<span class="badge err">❌ Signature invalide</span></div></div>';
     } else {
       html += '<div class="card"><div style="display:flex;align-items:center;gap:8px;">';
-      html += '<span class="badge err">❌ Signature invalide</span>';
-      html += '<span style="font-size:12px;color:#888">'+esc(sigErr||'')+'</span></div></div>';
+      html += '<span class="badge warn">⚠ Signature non vérifiée</span>';
+      html += '<span style="font-size:12px;color:#888">certificat non récupéré</span></div></div>';
     }
 
     // Chaîne de confiance — résolution EN LIGNE (prod d'abord, qualif en repli)
     var cp = sources.chainPath, base = sources.base;
     function envBadge(env) {
-      return '<span class="badge ' + (env === 'production' ? 'ok' : 'warn') +
-             '" style="font-size:10px">' + esc(env) + '</span>';
+      return env ? '<span class="badge ' + (env === 'production' ? 'ok' : 'warn') +
+             '" style="font-size:10px">' + esc(env) + '</span>' : '';
+    }
+    function foundBadge(ok) {
+      return ok ? '<span class="badge ok" style="font-size:10px">✓ téléchargé</span>'
+                : '<span class="badge err" style="font-size:10px">✗ introuvable</span>';
     }
     html += '<div class="card">';
     html += '<h2>Chaîne de confiance · ANTS</h2>';
-    html += '<div class="demo-note" style="background:#eaf3de;border-color:#9bc36a;color:#3b6d11">✓ <strong>Manifest et certificat récupérés en ligne.</strong> Résolution tentée sur la prod puis la qualif selon le HEADER ; la clé de vérification provient du certificat téléchargé.</div>';
-    if (sources.manifestEnv !== sources.certEnv) {
+    if (manifest && sources.cert) {
+      html += '<div class="demo-note" style="background:#eaf3de;border-color:#9bc36a;color:#3b6d11">✓ <strong>Manifest et certificat récupérés en ligne.</strong> Résolution tentée sur la prod puis la qualif selon le HEADER.</div>';
+    } else {
+      html += '<div class="demo-note">Résolution tentée sur la prod puis la qualif selon le HEADER. Élément(s) manquant(s) signalé(s) ci-dessous.</div>';
+    }
+    if (manifest && sources.cert && sources.manifestEnv !== sources.certEnv) {
       html += '<div class="demo-note" style="margin-top:.5em">⚠ Manifest et certificat proviennent d\'environnements différents (manifest : '+esc(sources.manifestEnv)+', certificat : '+esc(sources.certEnv)+').</div>';
     }
     html += '<div class="chain-step"><div class="step-num">1</div><div>';
@@ -750,13 +789,13 @@ document.head.appendChild(jsQRScript);
     html += '<div class="step-url"><a href="'+esc(base)+'/02_TSLs/'+esc(cp)+'/" target="_blank">'+esc(base)+'/02_TSLs/'+esc(cp)+'/</a></div>';
     html += '<div class="step-desc">authorityId + certificateId → '+esc(header.authorityId)+' / '+esc(header.certificateId)+'</div></div></div>';
     html += '<div class="chain-step"><div class="step-num">4</div><div>';
-    html += '<div class="step-title">Certificat de signature <span class="badge ok" style="font-size:10px">✓ téléchargé</span> '+envBadge(sources.certEnv)+'</div>';
-    html += '<div class="step-url"><a href="'+esc(sources.certUrl)+'" target="_blank">'+esc(sources.certUrl)+'</a></div>';
-    html += '<div class="step-desc">Clé publique EC P-256 extraite du certificat → vérification de la signature</div></div></div>';
+    html += '<div class="step-title">Certificat de signature '+foundBadge(!!sources.cert)+' '+envBadge(sources.certEnv)+'</div>';
+    if (sources.certUrl) html += '<div class="step-url"><a href="'+esc(sources.certUrl)+'" target="_blank">'+esc(sources.certUrl)+'</a></div>';
+    html += '<div class="step-desc">'+(sources.cert ? 'Clé publique EC P-256 extraite du certificat → vérification de la signature' : 'Introuvable sur prod et qualif → signature non vérifiée')+'</div></div></div>';
     html += '<div class="chain-step"><div class="step-num">5</div><div>';
-    html += '<div class="step-title">Manifest '+esc(MANIFEST.id)+' <span class="badge ok" style="font-size:10px">✓ téléchargé</span> '+envBadge(sources.manifestEnv)+'</div>';
-    html += '<div class="step-url"><a href="'+esc(sources.manifestUrl)+'" target="_blank">'+esc(sources.manifestUrl)+'</a></div>';
-    html += '<div class="step-desc">Schéma du PAYLOAD — champs, types et dictionnaires</div></div></div>';
+    html += '<div class="step-title">Manifest '+esc(header.manifestId)+' '+foundBadge(!!manifest)+' '+envBadge(sources.manifestEnv)+'</div>';
+    if (sources.manifestUrl) html += '<div class="step-url"><a href="'+esc(sources.manifestUrl)+'" target="_blank">'+esc(sources.manifestUrl)+'</a></div>';
+    html += '<div class="step-desc">'+(manifest ? 'Schéma du PAYLOAD — champs, types et dictionnaires' : 'Introuvable sur prod et qualif → champs affichés en brut')+'</div></div></div>';
     html += '</div>';
 
     // HEADER
@@ -773,9 +812,14 @@ document.head.appendChild(jsQRScript);
     html += '</div>';
 
     // PAYLOAD
-    html += '<div class="card"><h2>Payload — '+esc(MANIFEST.name)+'</h2>';
-    html += '<div style="font-size:12px;color:#888;margin-bottom:0.75rem">'+esc(MANIFEST.description)+' · Manifest '+MANIFEST.id+'</div>';
-    html += renderMapped(mapped);
+    html += '<div class="card"><h2>Payload'+(manifest ? ' — '+esc(manifest.name) : ' — valeurs brutes')+'</h2>';
+    if (manifest) {
+      html += '<div style="font-size:12px;color:#888;margin-bottom:0.75rem">'+esc(manifest.description)+' · Manifest '+esc(manifest.id)+'</div>';
+      html += renderMapped(mapped);
+    } else {
+      html += '<div class="demo-note" style="margin-bottom:.75rem">Manifest indisponible : valeurs MessagePack décodées telles quelles, dans l\'ordre du flux, sans libellés ni types métier.</div>';
+      html += renderRawValues(payloadVals);
+    }
     html += '</div>';
 
     // SIGNATURE
@@ -861,27 +905,55 @@ document.head.appendChild(jsQRScript);
         + '<div style="font-size:12px;color:#888;margin-top:8px">Manifest '+esc(header.manifestId)+' · Autorité '+esc(header.authorityId)+' · Certificat '+esc(header.certificateId)+'</div></div>';
       showResult();
 
-      // Télécharger en parallèle le manifest (schéma) et le certificat (clé publique)
+      // Récupérer le manifest (schéma) et le certificat (clé) INDÉPENDAMMENT :
+      // l'échec de l'un ou des deux ne doit pas empêcher l'affichage du contenu.
+      function settle(p) {
+        return p.then(function(v){ return { ok: true, val: v }; },
+                      function(e){ return { ok: false, err: e }; });
+      }
       Promise.all([
-        fetchManifest(chainPath, manifestIdRaw),
-        fetchCertificate(chainPath, header.authorityId, header.certificateId)
+        settle(fetchManifest(chainPath, manifestIdRaw)),
+        settle(fetchCertificate(chainPath, header.authorityId, header.certificateId))
       ]).then(function(res) {
-        MANIFEST = res[0];                       // schéma → moteur de rendu
-        var cert = res[1];
-        // Cadrage : tableau enveloppant si une seule valeur tableau dont la taille
-        // = nb de champs du manifest ; sinon flux de valeurs (référence ANTS/JDD).
-        var fieldVals = (payloadVals.length === 1 && payloadVals[0].type === 'array'
-                         && payloadVals[0].val.length === MANIFEST.fields.length)
-                        ? payloadVals[0].val : payloadVals;
-        var mapped  = mapArray(fieldVals, MANIFEST.fields);
-        var sources = { chainPath: chainPath, manifestUrl: MANIFEST.url, certUrl: cert.url,
-                        manifestEnv: MANIFEST.env, certEnv: cert.env, base: cert.base };
-        return verifySignature(hdr, payloadBytes, sigBytes, cert.point).then(function(ok) {
-          resultDiv.innerHTML = renderResult(rawString, hdr, header, payloadBytes, sigBytes, mapped, ok, '', sources);
+        var manifest = res[0].ok ? res[0].val : null;
+        var cert     = res[1].ok ? res[1].val : null;
+        MANIFEST = manifest;                     // global (utilisé par mapField)
+
+        // Mapping selon le schéma si le manifest est disponible
+        var mapped = null;
+        if (manifest) {
+          // Cadrage : tableau enveloppant si une seule valeur tableau dont la taille
+          // = nb de champs ; sinon flux de valeurs (référence ANTS/JDD).
+          var fieldVals = (payloadVals.length === 1 && payloadVals[0].type === 'array'
+                           && payloadVals[0].val.length === manifest.fields.length)
+                          ? payloadVals[0].val : payloadVals;
+          mapped = mapArray(fieldVals, manifest.fields);
+        }
+
+        var sources = {
+          chainPath: chainPath,
+          base: (cert && cert.base) || (manifest && manifest.base) || ENVIRONMENTS[0].base,
+          cert: cert,
+          manifestUrl: manifest ? manifest.url : null, manifestEnv: manifest ? manifest.env : null,
+          certUrl:     cert ? cert.url : null,         certEnv:     cert ? cert.env : null,
+          manifestErr: res[0].ok ? null : (res[0].err && res[0].err.message),
+          certErr:     res[1].ok ? null : (res[1].err && res[1].err.message)
+        };
+
+        function render(sigState) {
+          resultDiv.innerHTML = renderResult(rawString, hdr, header, payloadBytes, sigBytes,
+            { manifest: manifest, mapped: mapped, payloadVals: payloadVals, sigState: sigState, sources: sources });
           showResult();
-        });
+        }
+
+        // Signature vérifiable seulement si le certificat a été récupéré
+        if (!cert) { render('unverified'); return; }
+        return verifySignature(hdr, payloadBytes, sigBytes, cert.point)
+          .then(function(ok){ render(ok ? 'valid' : 'invalid'); })
+          .catch(function(){ render('unverified'); });   // erreur crypto → on affiche quand même
       }).catch(function(e) {
-        resultDiv.innerHTML = renderFetchError(e, header, chainPath);
+        // Erreur inattendue pendant le rendu : on ne laisse pas le spinner tourner
+        resultDiv.innerHTML = '<div class="card"><span class="badge err">❌ '+esc(e && e.message ? e.message : e)+'</span></div>';
         showResult();
       });
 

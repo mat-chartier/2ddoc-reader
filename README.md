@@ -85,4 +85,19 @@ Le jeu de données officiel de l'ANTS (JDD) fournit des vecteurs signés et conf
 
 ## Licence
 
-À définir par l'auteur du dépôt (par exemple MIT).
+Ce projet est distribué sous **EUPL v1.2** (European Union Public Licence), une licence open source copyleft rédigée par la Commission européenne, approuvée par l'OSI et adaptée aux projets du secteur public européen. Identifiant SPDX : `EUPL-1.2`.
+
+En résumé : vous êtes libre d'utiliser, étudier, modifier et redistribuer ce logiciel ; toute version modifiée et redistribuée doit rester sous l'EUPL (ou une licence compatible listée par l'EUPL, telle que GPLv2/v3, AGPLv3, MPL 2.0, EPL ou CeCILL) et son code source doit être mis à disposition. Le texte officiel fait foi dans les ~23 langues de l'UE.
+
+Pour appliquer la licence au dépôt :
+
+1. Ajoutez un fichier `LICENSE` contenant le texte intégral de l'EUPL v1.2, disponible sur le site de la Commission : https://joinup.ec.europa.eu/collection/eupl/eupl-text-eupl-12
+2. Indiquez l'année et le titulaire des droits, par exemple en tête de `index.html` :
+
+```
+Copyright (c) 2026 Mathieu Chartier
+Licensed under the EUPL v1.2. See the LICENSE file or
+https://joinup.ec.europa.eu/collection/eupl for details.
+```
+
+Le texte intégral de la licence prévaut sur ce résumé.

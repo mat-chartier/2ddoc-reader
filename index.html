@@ -180,7 +180,7 @@
 </head>
 <body>
 <div class="container">
-  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">v3.3 · chaîne en ligne</span></h1>
+  <h1>2D-DOC Reader <span style="font-size:13px;font-weight:400;color:#888;margin-left:6px;">v3.5 · chaîne en ligne</span></h1>
   <div class="subtitle">Décodeur 2D-DOC V2 (ISO 22376) · manifest &amp; certificat récupérés en ligne sur la prod et qualif ANTS</div>
 
   <div class="card" id="inputCard">
@@ -552,27 +552,54 @@ document.head.appendChild(jsQRScript);
   // ═══════════════════════════════════════════════════════════════
   // MSGPACK DECODE
   // ═══════════════════════════════════════════════════════════════
+  function rdU16(b,o){ return (b[o]<<8)|b[o+1]; }
+  function rdU32(b,o){ return ((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0; }
+
   function msgDecode(buf, offset) {
     var b = buf[offset];
     if (b === 0xC0) return { val: null,  next: offset+1, type: 'nil'   };
     if (b === 0xC2) return { val: false, next: offset+1, type: 'bool'  };
     if (b === 0xC3) return { val: true,  next: offset+1, type: 'bool'  };
-    if ((b & 0x80) === 0)   return { val: b,       next: offset+1, type: 'int' };
+    if ((b & 0x80) === 0)    return { val: b,      next: offset+1, type: 'int' };
     if ((b & 0xE0) === 0xE0) return { val: b-256,  next: offset+1, type: 'int' };
     if ((b & 0xE0) === 0xA0) { var ls = b & 0x1F; return { val: utf8d(buf, offset+1, ls), next: offset+1+ls, type: 'str' }; }
-    if ((b & 0xF0) === 0x90) { var na = b & 0x0F; return arrDec(buf, offset+1, na); }
+    if ((b & 0xF0) === 0x90) return arrDec(buf, offset+1, b & 0x0F);
+    if ((b & 0xF0) === 0x80) return mapDec(buf, offset+1, b & 0x0F);           // fixmap
+    // entiers
     if (b === 0xCC) return { val: buf[offset+1], next: offset+2, type: 'int' };
-    if (b === 0xCD) return { val: (buf[offset+1]<<8)|buf[offset+2], next: offset+3, type: 'int' };
-    if (b === 0xCE) return { val: ((buf[offset+1]<<24)|(buf[offset+2]<<16)|(buf[offset+3]<<8)|buf[offset+4])>>>0, next: offset+5, type: 'int' };
+    if (b === 0xCD) return { val: rdU16(buf,offset+1), next: offset+3, type: 'int' };
+    if (b === 0xCE) return { val: rdU32(buf,offset+1), next: offset+5, type: 'int' };
+    if (b === 0xCF) { return { val: rdU32(buf,offset+1)*4294967296 + rdU32(buf,offset+5), next: offset+9, type: 'int' }; } // uint64
     if (b === 0xD0) { var v8=buf[offset+1]; return { val: v8>=128?v8-256:v8, next: offset+2, type: 'int' }; }
-    if (b === 0xD1) { var v16=(buf[offset+1]<<8)|buf[offset+2]; return { val: v16>=32768?v16-65536:v16, next: offset+3, type: 'int' }; }
+    if (b === 0xD1) { var v16=rdU16(buf,offset+1); return { val: v16>=32768?v16-65536:v16, next: offset+3, type: 'int' }; }
     if (b === 0xD2) { return { val: (buf[offset+1]<<24)|(buf[offset+2]<<16)|(buf[offset+3]<<8)|buf[offset+4], next: offset+5, type: 'int' }; }
+    if (b === 0xD3) { var h=(buf[offset+1]<<24)|(buf[offset+2]<<16)|(buf[offset+3]<<8)|buf[offset+4]; return { val: h*4294967296 + rdU32(buf,offset+5), next: offset+9, type: 'int' }; } // int64
+    // flottants
     if (b === 0xCA) { var dv32=new DataView(buf.buffer,buf.byteOffset+offset+1,4); return { val: dv32.getFloat32(0,false), next: offset+5, type: 'float' }; }
     if (b === 0xCB) { var dv64=new DataView(buf.buffer,buf.byteOffset+offset+1,8); return { val: dv64.getFloat64(0,false), next: offset+9, type: 'float' }; }
-    if (b === 0xD9) { var ls8=buf[offset+1]; return { val: utf8d(buf,offset+2,ls8), next: offset+2+ls8, type: 'str' }; }
-    if (b === 0xDA) { var ls16=(buf[offset+1]<<8)|buf[offset+2]; return { val: utf8d(buf,offset+3,ls16), next: offset+3+ls16, type: 'str' }; }
-    if (b === 0xDC) { var na16=(buf[offset+1]<<8)|buf[offset+2]; return arrDec(buf,offset+3,na16); }
-    if (b === 0xDD) { var na32=((buf[offset+1]<<24)|(buf[offset+2]<<16)|(buf[offset+3]<<8)|buf[offset+4])>>>0; return arrDec(buf,offset+5,na32); }
+    // chaînes
+    if (b === 0xD9) { var l8=buf[offset+1];        return { val: utf8d(buf,offset+2,l8),  next: offset+2+l8,  type: 'str' }; }
+    if (b === 0xDA) { var l16=rdU16(buf,offset+1); return { val: utf8d(buf,offset+3,l16), next: offset+3+l16, type: 'str' }; }
+    if (b === 0xDB) { var l32=rdU32(buf,offset+1); return { val: utf8d(buf,offset+5,l32), next: offset+5+l32, type: 'str' }; }
+    // binaires
+    if (b === 0xC4) { var k8=buf[offset+1];        return { val: buf.slice(offset+2,offset+2+k8),   next: offset+2+k8,   type: 'bin' }; }
+    if (b === 0xC5) { var k16=rdU16(buf,offset+1); return { val: buf.slice(offset+3,offset+3+k16),  next: offset+3+k16,  type: 'bin' }; }
+    if (b === 0xC6) { var k32=rdU32(buf,offset+1); return { val: buf.slice(offset+5,offset+5+k32),  next: offset+5+k32,  type: 'bin' }; }
+    // tableaux
+    if (b === 0xDC) return arrDec(buf, offset+3, rdU16(buf,offset+1));
+    if (b === 0xDD) return arrDec(buf, offset+5, rdU32(buf,offset+1));
+    // maps
+    if (b === 0xDE) return mapDec(buf, offset+3, rdU16(buf,offset+1));
+    if (b === 0xDF) return mapDec(buf, offset+5, rdU32(buf,offset+1));
+    // extensions (Timestamp = type -1)
+    if (b === 0xD4) return extDec(buf, offset, 1);
+    if (b === 0xD5) return extDec(buf, offset, 2);
+    if (b === 0xD6) return extDec(buf, offset, 4);
+    if (b === 0xD7) return extDec(buf, offset, 8);
+    if (b === 0xD8) return extDec(buf, offset, 16);
+    if (b === 0xC7) return extDec(buf, offset, buf[offset+1], 1);
+    if (b === 0xC8) return extDec(buf, offset, rdU16(buf,offset+1), 2);
+    if (b === 0xC9) return extDec(buf, offset, rdU32(buf,offset+1), 4);
     return { val: '(0x'+b.toString(16)+')', next: offset+1, type: 'unknown' };
   }
 
@@ -580,6 +607,29 @@ document.head.appendChild(jsQRScript);
     var arr = [], cur = offset;
     for (var i = 0; i < n; i++) { var item = msgDecode(buf, cur); arr.push(item); cur = item.next; }
     return { val: arr, next: cur, type: 'array' };
+  }
+
+  function mapDec(buf, offset, n) {
+    var pairs = [], cur = offset;
+    for (var i = 0; i < n; i++) { var k = msgDecode(buf, cur); cur = k.next; var v = msgDecode(buf, cur); cur = v.next; pairs.push([k, v]); }
+    return { val: pairs, next: cur, type: 'map' };
+  }
+
+  // Extensions MessagePack. fixext : marqueur+type ; ext : marqueur+len(lenBytes)+type.
+  // Timestamp = type 0xFF (-1) : 4 o (secondes), 8 o (34b sec + 30b ns) ou 12 o.
+  function extDec(buf, offset, dataLen, lenBytes) {
+    var headerLen, typeByte;
+    if (lenBytes === undefined) { headerLen = 2; typeByte = buf[offset+1]; }              // fixext
+    else { headerLen = 1 + lenBytes + 1; typeByte = buf[offset+1+lenBytes]; }              // ext
+    var dataStart = offset + headerLen, next = dataStart + dataLen;
+    if (typeByte === 0xFF) {                                                               // Timestamp
+      var secs = 0;
+      if (dataLen === 4)       secs = rdU32(buf, dataStart);
+      else if (dataLen === 8)  secs = (rdU32(buf, dataStart) & 0x3) * 4294967296 + rdU32(buf, dataStart+4);
+      else if (dataLen === 12) secs = rdU32(buf, dataStart+4) * 4294967296 + rdU32(buf, dataStart+8);
+      return { val: secs, next: next, type: 'timestamp' };
+    }
+    return { val: buf.slice(dataStart, next), next: next, type: 'ext', extType: typeByte };
   }
 
   // Décode TOUTES les valeurs de tête d'un payload (flux MessagePack).
@@ -603,11 +653,41 @@ document.head.appendChild(jsQRScript);
   // UTILITAIRES
   // ═══════════════════════════════════════════════════════════════
   var REF = new Date(Date.UTC(1900, 0, 1));
-  function daysToDate(d) { return new Date(REF.getTime() + d*86400000).toISOString().slice(0,10); }
-  function tsToDate(ts)  { return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19)+' UTC'; }
+  function daysToDate(d) {
+    if (typeof d !== 'number' || !isFinite(d)) return '(date invalide)';
+    var dt = new Date(REF.getTime() + d*86400000);
+    return isNaN(dt.getTime()) ? '(date invalide)' : dt.toISOString().slice(0,10);
+  }
+  function tsToDate(ts)  {
+    if (typeof ts !== 'number' || !isFinite(ts)) return '(horodatage invalide)';
+    var dt = new Date(ts*1000);
+    return isNaN(dt.getTime()) ? '(horodatage invalide)' : dt.toISOString().replace('T',' ').slice(0,19)+' UTC';
+  }
   function b2h(b)        { return ('00'+(b&0xFF).toString(16)).slice(-2); }
   function toHex(arr)    { var s=''; for(var i=0;i<arr.length;i++) s+=b2h(arr[i]); return s.toUpperCase(); }
   function esc(s)        { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ── Images embarquées (champs Binary) ──────────────────────────────
+  function bytesToBase64(bytes) {
+    var bin = '', CH = 0x8000;
+    for (var i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+    return btoa(bin);
+  }
+  function imageMime(b) {
+    if (!b || b.length < 4) return null;
+    if (b[0]===0x89 && b[1]===0x50 && b[2]===0x4E && b[3]===0x47) return 'image/png';
+    if (b[0]===0xFF && b[1]===0xD8 && b[2]===0xFF)               return 'image/jpeg';
+    if (b[0]===0x47 && b[1]===0x49 && b[2]===0x46 && b[3]===0x38) return 'image/gif';
+    if (b.length>=12 && b[0]===0x52 && b[1]===0x49 && b[2]===0x46 && b[3]===0x46
+        && b[8]===0x57 && b[9]===0x45 && b[10]===0x42 && b[11]===0x50) return 'image/webp';
+    return null;
+  }
+  function imageHtml(bytes) {
+    var mime = imageMime(bytes); if (!mime) return null;
+    return '<img src="data:'+mime+';base64,'+bytesToBase64(bytes)+'" alt="image embarquée" '
+         + 'style="max-width:220px;max-height:220px;border-radius:8px;display:block;margin-top:6px;border:1px solid #e0e0e0">'
+         + '<div style="font-size:11px;color:#aaa;margin-top:2px">'+bytes.length+' octets · '+mime+'</div>';
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // VÉRIFICATION SIGNATURE — Web Crypto API
@@ -671,19 +751,37 @@ document.head.appendChild(jsQRScript);
       var d = MANIFEST.dicts[f.dict] || {};
       return { name: f.name, display: d[val] ? val + ' — ' + d[val] : val };
     }
+    if (f.type === 'BINARY') {
+      var nb = (val && val.length) ? val.length : 0;
+      var img = (val && val.length) ? imageHtml(val) : null;
+      if (img) return { name: f.name, html: img };
+      return { name: f.name, display: '« ' + nb + ' octets binaires »' };
+    }
+    if (f.type === 'TIMESTAMP') {
+      return { name: f.name, display: (typeof val === 'number') ? tsToDate(val) : String(val) };
+    }
     if (f.type === 'OBJECT' && f.objectType) {
       var sub = MANIFEST.types[f.objectType] || [];
-      return { name: f.name, children: mapArray(val, sub) };
+      return { name: f.name, children: mapArray(Array.isArray(val) ? val : [], sub) };
     }
     if (f.type === 'OBJECT_ARRAY' && f.objectType) {
       var sub2 = MANIFEST.types[f.objectType] || [];
-      var items = (val || []).map(function(item) { return mapArray(item.val || item, sub2); });
+      var arr = Array.isArray(val) ? val : [];
+      var items = arr.map(function(item) { return mapArray(item.val || item, sub2); });
       return { name: f.name, items: items };
     }
     if (f.type === 'STRING_ARRAY' && f.dict) {
       var d2 = MANIFEST.dicts[f.dict] || {};
-      var vals = (val || []).map(function(x) { var v = x.val !== undefined ? x.val : x; return d2[v] ? v+' — '+d2[v] : v; });
+      var vals = (Array.isArray(val) ? val : []).map(function(x) { var v = x.val !== undefined ? x.val : x; return d2[v] ? v+' — '+d2[v] : v; });
       return { name: f.name, display: vals.join(', ') };
+    }
+    if (/_ARRAY$/.test(f.type)) {                       // autres tableaux (Date/Integer/Float/Boolean/Binary/Timestamp)
+      var arr3 = Array.isArray(val) ? val : [];
+      return { name: f.name, display: arr3.map(function(x) {
+        if (x && x.type === 'bin')       return '«'+((x.val&&x.val.length)||0)+'o»';
+        if (x && x.type === 'timestamp') return tsToDate(x.val);
+        return (x && x.val !== undefined) ? String(x.val) : String(x);
+      }).join(', ') };
     }
     return { name: f.name, display: String(val) };
   }
@@ -699,6 +797,7 @@ document.head.appendChild(jsQRScript);
   function renderMapped(fields) {
     return fields.map(function(f) {
       if (f.nil)      return fr(f.name, '<span style="color:#aaa">— (absent)</span>');
+      if (f.html)     return fr(f.name, f.html);
       if (f.children) return fr(f.name, '<div style="margin-top:4px">'+renderMapped(f.children)+'</div>');
       if (f.items) {
         var html = '<div style="margin-top:4px">';
@@ -716,12 +815,19 @@ document.head.appendChild(jsQRScript);
     if (!v || v.type === 'nil' || v.val === null || v.val === undefined) return '— (nil)';
     if (v.type === 'array') return '[ ' + v.val.map(rawValueToString).join('  ,  ') + ' ]';
     if (v.type === 'bool')  return v.val ? 'true' : 'false';
+    if (v.type === 'bin')   return '« ' + ((v.val && v.val.length) || 0) + ' octets binaires »';
+    if (v.type === 'timestamp') return tsToDate(v.val) + ' (ts)';
+    if (v.type === 'map')   return '{ ' + v.val.length + ' paire(s) }';
     return String(v.val);
   }
   function renderRawValues(vals) {
     return vals.map(function(v, i) {
-      return fr('Champ ' + (i+1) + '&nbsp;<span class="type-tag">' + esc(v.type) + '</span>',
-                esc(rawValueToString(v)), true);
+      var label = 'Champ ' + (i+1) + '&nbsp;<span class="type-tag">' + esc(v.type) + '</span>';
+      if (v.type === 'bin') {
+        var img = imageHtml(v.val);
+        if (img) return fr(label, img, true);
+      }
+      return fr(label, esc(rawValueToString(v)), true);
     }).join('');
   }
 

@@ -95,7 +95,7 @@ Pour appliquer la licence au dépôt :
 2. Indiquez l'année et le titulaire des droits, par exemple en tête de `index.html` :
 
 ```
-Copyright (c) 2026 Mathieu Chartier
+Copyright (c) 2026 Matthieu Chartier
 Licensed under the EUPL v1.2. See the LICENSE file or
 https://joinup.ec.europa.eu/collection/eupl for details.
 ```

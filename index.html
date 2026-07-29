@@ -656,12 +656,23 @@ document.head.appendChild(jsQRScript);
   function daysToDate(d) {
     if (typeof d !== 'number' || !isFinite(d)) return '(date invalide)';
     var dt = new Date(REF.getTime() + d*86400000);
-    return isNaN(dt.getTime()) ? '(date invalide)' : dt.toISOString().slice(0,10);
+    if (isNaN(dt.getTime())) return '(date invalide)';
+    var day = String(dt.getUTCDate()).padStart(2, '0');
+    var month = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    var year = dt.getUTCFullYear();
+    return day + '/' + month + '/' + year;
   }
   function tsToDate(ts)  {
     if (typeof ts !== 'number' || !isFinite(ts)) return '(horodatage invalide)';
     var dt = new Date(ts*1000);
-    return isNaN(dt.getTime()) ? '(horodatage invalide)' : dt.toISOString().replace('T',' ').slice(0,19)+' UTC';
+    if (isNaN(dt.getTime())) return '(horodatage invalide)';
+    var day = String(dt.getUTCDate()).padStart(2, '0');
+    var month = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    var year = dt.getUTCFullYear();
+    var hours = String(dt.getUTCHours()).padStart(2, '0');
+    var mins = String(dt.getUTCMinutes()).padStart(2, '0');
+    var secs = String(dt.getUTCSeconds()).padStart(2, '0');
+    return day + '/' + month + '/' + year + ' ' + hours + ':' + mins + ':' + secs + ' UTC';
   }
   function b2h(b)        { return ('00'+(b&0xFF).toString(16)).slice(-2); }
   function toHex(arr)    { var s=''; for(var i=0;i<arr.length;i++) s+=b2h(arr[i]); return s.toUpperCase(); }
